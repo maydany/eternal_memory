@@ -1,0 +1,280 @@
+"""
+Chat API Routes
+
+Endpoints for memory-augmented conversation.
+"""
+
+from typing import Literal, Optional
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+
+from eternal_memory.api.main import get_memory_system
+
+router = APIRouter()
+
+
+class ChatMessage(BaseModel):
+    """Chat message request."""
+    content: str
+    metadata: Optional[dict] = None
+
+
+class ChatResponse(BaseModel):
+    """Chat response with memory context."""
+    message: str
+    memories_stored: int
+    references: list[dict]
+    processing_steps: list[str]
+
+
+class RetrieveRequest(BaseModel):
+    """Memory retrieval request."""
+    query: str
+    mode: Literal["fast", "deep"] = "fast"
+
+
+class RetrieveResponse(BaseModel):
+    """Memory retrieval response."""
+    items: list[dict]
+    related_categories: list[str]
+    suggested_context: str
+    query_evolved: Optional[str]
+    mode: str
+    confidence_score: float
+
+
+@router.post("/memorize", response_model=dict)
+async def memorize(message: ChatMessage):
+    """
+    Store information as memory.
+    
+    Extracts salient facts from the input and stores them
+    in both the vector database and Markdown vault.
+    """
+    try:
+        system = await get_memory_system()
+        item = await system.memorize(message.content, message.metadata)
+        
+        return {
+            "success": True,
+            "item": {
+                "id": str(item.id),
+                "content": item.content,
+                "category_path": item.category_path,
+                "type": item.type.value if hasattr(item.type, 'value') else str(item.type),
+                "importance": item.importance,
+            },
+            "processing_steps": [
+                "Extracting facts from input...",
+                "Assigning to category...",
+                "Generating embedding...",
+                "Saving to database...",
+                "Updating Markdown vault...",
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/retrieve", response_model=RetrieveResponse)
+async def retrieve(request: RetrieveRequest):
+    """
+    Retrieve memories based on query.
+    
+    Supports two modes:
+    - fast: Vector similarity + keyword search (RAG)
+    - deep: LLM reads summaries and reasons the answer
+    """
+    try:
+        system = await get_memory_system()
+        result = await system.retrieve(request.query, request.mode)
+        
+        return RetrieveResponse(
+            items=[
+                {
+                    "id": str(item.id),
+                    "content": item.content,
+                    "category_path": item.category_path,
+                    "type": item.type.value if hasattr(item.type, 'value') else str(item.type),
+                    "importance": item.importance,
+                    "confidence": item.confidence,
+                }
+                for item in result.items
+            ],
+            related_categories=result.related_categories,
+            suggested_context=result.suggested_context,
+            query_evolved=result.query_evolved,
+            mode=result.retrieval_mode,
+            confidence_score=result.confidence_score,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/predict-context")
+async def predict_context(context: dict):
+    """
+    Generate proactive context based on current situation.
+    
+    Analyzes patterns and predicts what information
+    might be relevant for the user.
+    """
+    try:
+        system = await get_memory_system()
+        predicted = await system.predict_context(context)
+        
+        return {
+            "context": predicted,
+            "source": "predict_pipeline",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ConversationRequest(BaseModel):
+    """Natural conversation request."""
+    message: str
+    mode: Literal["fast", "deep"] = "fast"
+    conversation_history: Optional[list[dict]] = None
+
+
+class ConversationResponse(BaseModel):
+    """Natural conversation response."""
+    response: str
+    memories_retrieved: list[dict]
+    memories_stored: list[dict]
+    processing_info: dict
+
+
+@router.post("/conversation", response_model=ConversationResponse)
+async def conversation(request: ConversationRequest):
+    """
+    Natural conversation with automatic memory management.
+    
+    This endpoint:
+    1. Retrieves relevant memories based on the message
+    2. Generates an LLM response with memory context
+    3. Auto-memorizes important information from the conversation
+    """
+    import os
+    from openai import AsyncOpenAI
+    
+    try:
+        system = await get_memory_system()
+        
+        # Step 1: Retrieve relevant memories
+        memories_retrieved = []
+        memory_context = ""
+        
+        try:
+            result = await system.retrieve(request.message, request.mode)
+            if result.items:
+                memories_retrieved = [
+                    {
+                        "id": str(item.id),
+                        "content": item.content,
+                        "category_path": item.category_path,
+                        "confidence": item.confidence,
+                    }
+                    for item in result.items
+                ]
+                memory_context = "\n".join([f"- {item.content}" for item in result.items])
+        except Exception:
+            # Continue even if retrieval fails
+            pass
+        
+        # Step 2: Generate LLM response with memory context
+        api_key = os.getenv("OPENAI_API_KEY")
+        model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        
+        client = AsyncOpenAI(api_key=api_key)
+        
+        system_prompt = """You are a helpful AI assistant with persistent memory.
+You remember information about the user across conversations.
+When the user shares personal information, acknowledge it warmly and remember it.
+When you have relevant memories, use them naturally in your responses.
+
+Important: Always respond in the same language the user uses."""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        
+        # Add memory context if available
+        if memory_context:
+            messages.append({
+                "role": "system", 
+                "content": f"Relevant memories about this user:\n{memory_context}"
+            })
+        
+        # Add conversation history if provided
+        if request.conversation_history:
+            messages.extend(request.conversation_history[-10:])  # Last 10 messages
+        
+        # Add current user message
+        messages.append({"role": "user", "content": request.message})
+        
+        # Generate response
+        completion = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.7,
+            max_tokens=1000,
+        )
+        
+        ai_response = completion.choices[0].message.content
+        
+        # Step 3: Analyze and auto-memorize important information
+        memories_stored = []
+        
+        # Use LLM to extract memorable facts
+        extraction_prompt = f"""Analyze this conversation and extract any important facts about the user that should be remembered.
+Only extract NEW, specific, factual information (like name, preferences, facts they shared).
+If there's nothing memorable, respond with "NONE".
+
+User message: {request.message}
+
+Respond in this format (one fact per line):
+FACT: [the fact to remember]
+
+Or just:
+NONE"""
+
+        extraction_response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": extraction_prompt}],
+            temperature=0,
+            max_tokens=200,
+        )
+        
+        extracted = extraction_response.choices[0].message.content.strip()
+        
+        if extracted and extracted.upper() != "NONE":
+            # Parse and store each fact
+            for line in extracted.split("\n"):
+                if line.startswith("FACT:"):
+                    fact = line[5:].strip()
+                    if fact:
+                        try:
+                            item = await system.memorize(fact, {"source": "conversation"})
+                            memories_stored.append({
+                                "id": str(item.id),
+                                "content": item.content,
+                                "category_path": item.category_path,
+                            })
+                        except Exception:
+                            pass  # Continue even if one memorization fails
+        
+        return ConversationResponse(
+            response=ai_response,
+            memories_retrieved=memories_retrieved,
+            memories_stored=memories_stored,
+            processing_info={
+                "mode": request.mode,
+                "model": model,
+                "memories_found": len(memories_retrieved),
+                "facts_extracted": len(memories_stored),
+            }
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
