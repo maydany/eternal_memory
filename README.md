@@ -26,6 +26,19 @@ brew services start postgresql@16
 createdb eternal_memory
 ```
 
+## Running the Application
+
+One command to run the entire system (Database + Backend + Frontend):
+
+```bash
+./scripts/run.sh
+```
+
+This script will:
+1. Check if PostgreSQL is running (and start it if needed)
+2. Start the Backend API (http://localhost:8000)
+3. Start the Frontend UI (http://localhost:5173)
+
 ## Usage
 
 ```python
