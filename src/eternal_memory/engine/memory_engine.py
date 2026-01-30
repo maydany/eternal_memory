@@ -20,6 +20,8 @@ from eternal_memory.pipelines.memorize import MemorizePipeline
 from eternal_memory.pipelines.flush import FlushPipeline
 from eternal_memory.pipelines.predict import PredictPipeline
 from eternal_memory.pipelines.retrieve import RetrievePipeline
+from eternal_memory.scheduling.scheduler import CronScheduler
+from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance
 from eternal_memory.vault.markdown_vault import MarkdownVault
 
 
@@ -32,7 +34,9 @@ class EternalMemorySystem(EternalMemoryEngine):
     2. retrieve() - Recall memories (fast/deep modes)
     3. consolidate() - Maintain and archive
     4. predict_context() - Proactive context generation
+    4. predict_context() - Proactive context generation
     5. buffer_and_flush() - Manage conversation buffer and periodic flush
+    6. cron - Automated background tasks (Daily Reflection, Maintenance)
     
     Usage:
         memory = EternalMemorySystem()
@@ -81,7 +85,12 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         # Conversation buffer state
         self.conversation_buffer: list[dict] = []
+        # Conversation buffer state
+        self.conversation_buffer: list[dict] = []
         self.FLUSH_THRESHOLD_TOKENS = 2000  # Default threshold
+        
+        # Scheduler
+        self.scheduler = CronScheduler()
         
         self._initialized = False
     
@@ -139,10 +148,38 @@ class EternalMemorySystem(EternalMemoryEngine):
             memorize_pipeline=self._memorize_pipeline,
         )
         
+        self._flush_pipeline = FlushPipeline(
+            repository=self.repository,
+            llm_client=self.llm,
+            vault=self.vault,
+            memorize_pipeline=self._memorize_pipeline,
+        )
+        
+        # Register standard cron jobs
+        # Daily Reflection (every 24h = 86400s)
+        self.scheduler.add_job(
+            "daily_reflection",
+            86400,
+            lambda: job_daily_reflection(self)
+        )
+        
+        # Maintenance/Consolidation (every 12h = 43200s)
+        self.scheduler.add_job(
+            "maintenance", 
+            43200, 
+            lambda: job_maintenance(self)
+        )
+        
+        # Start the scheduler
+        await self.scheduler.start()
+        
         self._initialized = True
     
     async def close(self) -> None:
         """Close all connections and cleanup."""
+        if self.scheduler:
+            await self.scheduler.stop()
+            
         if self.repository:
             await self.repository.disconnect()
         self._initialized = False
