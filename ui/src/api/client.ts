@@ -162,7 +162,14 @@ class ApiClient {
 
   // Stats
   async getStats() {
-    return this.request<{ resources: number; categories: number; memory_items: number }>('/stats');
+    return this.request<{
+      resources: number;
+      categories: number;
+      memory_items: number;
+      token_usage?: { model: string; prompt: number; completion: number; total: number }[];
+      db_size?: string;
+      connected?: boolean;
+    }>('/stats');
   }
 
   // Get available models from provider

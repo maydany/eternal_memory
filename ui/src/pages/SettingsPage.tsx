@@ -8,10 +8,18 @@ interface ModelInfo {
   owned_by: string
 }
 
+interface TokenUsage {
+  model: string
+  prompt: number
+  completion: number
+  total: number
+}
+
 interface DbStats {
   resources: number
   categories: number
   memory_items: number
+  token_usage?: TokenUsage[]
   db_size?: string
   connected?: boolean
 }
@@ -250,6 +258,48 @@ export default function SettingsPage() {
             <div className="p-4 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-400 text-sm">
               데이터베이스 연결을 확인할 수 없습니다.
             </div>
+          )}
+        </section>
+
+        {/* Token Usage Tracking */}
+        <section className="space-y-4">
+          <h3 className="text-lg font-medium text-white flex items-center gap-2">
+            <RefreshCw className="w-5 h-5 text-purple-400" />
+            Token Usage Tracking
+          </h3>
+          
+          {dbStats?.token_usage && dbStats.token_usage.length > 0 ? (
+            <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-white/5 text-gray-400">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Model</th>
+                    <th className="px-4 py-3 font-medium text-right">Prompt</th>
+                    <th className="px-4 py-3 font-medium text-right">Completion</th>
+                    <th className="px-4 py-3 font-medium text-right font-bold text-white">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {dbStats.token_usage.map((usage, idx) => (
+                    <tr key={idx} className="hover:bg-white/5 transition-colors">
+                      <td className="px-4 py-3 font-mono text-blue-400">{usage.model}</td>
+                      <td className="px-4 py-3 text-right text-gray-400">{usage.prompt.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right text-gray-400">{usage.completion.toLocaleString()}</td>
+                      <td className="px-4 py-3 text-right font-bold text-white">{usage.total.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="p-3 bg-white/5 border-t border-white/10">
+                 <p className="text-[11px] text-gray-500 italic">
+                  * Cumulative token counts across all sessions.
+                </p>
+              </div>
+            </div>
+          ) : (
+             <div className="p-8 text-center bg-white/5 border border-white/10 rounded-xl">
+               <p className="text-gray-500">No token usage data recorded yet.</p>
+             </div>
           )}
         </section>
 

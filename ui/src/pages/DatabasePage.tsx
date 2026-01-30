@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Database, RefreshCw, ChevronLeft, ChevronRight, Hash } from 'lucide-react';
+import { Database, RefreshCw, ChevronLeft, ChevronRight, Hash, Trash2 } from 'lucide-react';
 
 interface MemoryItem {
   id: string;
@@ -23,6 +23,7 @@ export default function DatabasePage() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [size] = useState(20);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -38,12 +39,73 @@ export default function DatabasePage() {
     }
   };
 
+  const handleReset = async () => {
+    setShowConfirm(false);
+    setLoading(true);
+    try {
+      const res = await fetch('http://localhost:8000/api/database/reset', {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('Failed to reset system');
+      const json = await res.json();
+      alert(json.message);
+      setPage(1);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert('Error resetting system: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchData();
   }, [page]);
 
   return (
-    <div className="h-full flex flex-col p-6 space-y-6">
+    <div className="h-full flex flex-col p-6 space-y-6 relative">
+      {/* Custom Confirmation Modal */}
+      {showConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-white/10 rounded-2xl p-6 max-w-md w-full shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center space-x-3 mb-4">
+              <div className="p-2 bg-red-500/20 rounded-lg text-red-500">
+                <Trash2 className="w-6 h-6" />
+              </div>
+              <h3 className="text-xl font-bold text-white">Reset System Memory?</h3>
+            </div>
+            
+            <div className="space-y-3 text-zinc-400 text-sm mb-8">
+              <p>This action will <span className="text-red-400 font-bold uppercase underline">permanently delete</span> all entries:</p>
+              <ul className="list-disc list-inside space-y-1 ml-2">
+                <li>Decentralized Metadata (PostgreSQL)</li>
+                <li>Human-readable Markdown Vault</li>
+                <li>Semantic Vector Embeddings</li>
+              </ul>
+              <p className="bg-red-500/10 border border-red-500/20 p-3 rounded-lg text-red-300 mt-4 italic">
+                 🚨 Warning: This action cannot be undone.
+              </p>
+            </div>
+
+            <div className="flex space-x-3">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="flex-1 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl transition-all font-medium border border-white/5"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReset}
+                className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl transition-all font-bold shadow-lg shadow-red-900/20"
+              >
+                Reset All Data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-3">
           <div className="p-3 bg-purple-500/10 rounded-xl">
@@ -54,13 +116,23 @@ export default function DatabasePage() {
             <p className="text-sm text-zinc-400">Raw memory records from Vector DB</p>
           </div>
         </div>
-        <button
-          onClick={fetchData}
-          disabled={loading}
-          className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
-        >
-          <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center space-x-2">
+          <button
+            onClick={() => setShowConfirm(true)}
+            disabled={loading}
+            className="flex items-center px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition-all text-sm font-medium"
+          >
+            <Trash2 className={`w-4 h-4 mr-2 ${loading ? 'animate-pulse' : ''}`} />
+            Reset System
+          </button>
+          <button
+            onClick={fetchData}
+            disabled={loading}
+            className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors border border-white/5"
+          >
+            <RefreshCw className={`w-5 h-5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 bg-zinc-900/50 rounded-xl border border-white/5 overflow-hidden flex flex-col">

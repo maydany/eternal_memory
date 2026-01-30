@@ -11,7 +11,7 @@ Handles all LLM interactions including:
 
 import json
 import os
-from typing import List, Optional
+from typing import List, Optional, Callable, Any
 
 from openai import AsyncOpenAI
 
@@ -30,13 +30,25 @@ class LLMClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         model: str = "gpt-4o-mini",
+        usage_callback: Optional[callable] = None,
     ):
         self.model = model
+        self.usage_callback = usage_callback
         self.client = AsyncOpenAI(
             api_key=api_key or os.getenv("OPENAI_API_KEY"),
             base_url=base_url,
         )
     
+    async def _report_usage(self, response: Any, model_override: str = None):
+        """Helper to report token usage via callback."""
+        if self.usage_callback and hasattr(response, "usage") and response.usage:
+            await self.usage_callback(
+                model_override or self.model,
+                response.usage.prompt_tokens,
+                getattr(response.usage, "completion_tokens", 0),
+                response.usage.total_tokens
+            )
+
     async def extract_facts(
         self,
         text: str,
@@ -79,6 +91,7 @@ Return ONLY valid JSON array, no other text."""
             temperature=0.3,
             response_format={"type": "json_object"},
         )
+        await self._report_usage(response)
         
         try:
             result = json.loads(response.choices[0].message.content)
@@ -115,6 +128,7 @@ Return ONLY the clarified query, nothing else."""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
+        await self._report_usage(response)
         
         return response.choices[0].message.content.strip()
     
@@ -128,6 +142,7 @@ Return ONLY the clarified query, nothing else."""
             model="text-embedding-ada-002",
             input=text,
         )
+        await self._report_usage(response, model_override="text-embedding-ada-002")
         return response.data[0].embedding
     
     async def reason_from_context(
@@ -159,6 +174,7 @@ Provide a helpful answer based on the memories above. If the information is insu
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
         )
+        await self._report_usage(response)
         
         return response.choices[0].message.content
     
@@ -185,6 +201,7 @@ This summary will be used as a quick reference for this category."""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
         )
+        await self._report_usage(response)
         
         return response.choices[0].message.content
     
@@ -215,6 +232,7 @@ Focus on actionable predictions, not just observations."""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
         )
+        await self._report_usage(response)
         
         return response.choices[0].message.content
     
@@ -253,6 +271,7 @@ Category path (ONLY the path):"""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
         )
+        await self._report_usage(response)
         
         return response.choices[0].message.content.strip().lower()
 
@@ -286,6 +305,7 @@ Category path:"""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
         )
+        await self._report_usage(response)
         
         return response.choices[0].message.content.strip()
 
@@ -304,4 +324,5 @@ Category path:"""
             temperature=temperature,
             max_tokens=max_tokens,
         )
+        await self._report_usage(response)
         return response.choices[0].message.content

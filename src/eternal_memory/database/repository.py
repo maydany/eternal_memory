@@ -560,3 +560,31 @@ class MemoryRepository:
         """Get total number of memory items."""
         async with self._pool.acquire() as conn:
             return await conn.fetchval("SELECT COUNT(*) FROM memory_items")
+
+    async def record_token_usage(
+        self,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int
+    ) -> None:
+        """Update cumulative token usage for a model."""
+        if not self._pool:
+            return
+            
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO token_usage (model, prompt_tokens, completion_tokens, total_tokens, updated_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                ON CONFLICT (model) DO UPDATE SET
+                    prompt_tokens = token_usage.prompt_tokens + EXCLUDED.prompt_tokens,
+                    completion_tokens = token_usage.completion_tokens + EXCLUDED.completion_tokens,
+                    total_tokens = token_usage.total_tokens + EXCLUDED.total_tokens,
+                    updated_at = NOW()
+                """,
+                model,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            )

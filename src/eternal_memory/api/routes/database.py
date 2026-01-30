@@ -60,6 +60,17 @@ async def list_items(
             "size": size,
             "pages": (total + size - 1) // size
         }
-        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/reset")
+async def reset_database():
+    """
+    Completely wipe the database and markdown files.
+    """
+    try:
+        system = await get_memory_system()
+        await system.reset_system()
+        return {"success": True, "message": "System reset successful. All data wiped."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

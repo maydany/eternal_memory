@@ -49,6 +49,15 @@ CREATE TABLE IF NOT EXISTS memory_items (
     last_accessed TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 4. Token Usage: Cost Tracking
+CREATE TABLE IF NOT EXISTS token_usage (
+    model TEXT PRIMARY KEY,
+    prompt_tokens BIGINT DEFAULT 0,
+    completion_tokens BIGINT DEFAULT 0,
+    total_tokens BIGINT DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_memory_embedding 
     ON memory_items USING hnsw (embedding vector_cosine_ops);
@@ -102,6 +111,7 @@ class DatabaseSchema:
         DROP TABLE IF EXISTS memory_items CASCADE;
         DROP TABLE IF EXISTS categories CASCADE;
         DROP TABLE IF EXISTS resources CASCADE;
+        DROP TABLE IF EXISTS token_usage CASCADE;
         """
         conn = await asyncpg.connect(self.connection_string)
         try:
@@ -120,6 +130,18 @@ class DatabaseSchema:
             stats["categories"] = await conn.fetchval("SELECT COUNT(*) FROM categories")
             stats["memory_items"] = await conn.fetchval("SELECT COUNT(*) FROM memory_items")
             
+            # Fetch token usage
+            token_rows = await conn.fetch("SELECT model, prompt_tokens, completion_tokens, total_tokens FROM token_usage")
+            stats["token_usage"] = [
+                {
+                    "model": row["model"],
+                    "prompt": row["prompt_tokens"],
+                    "completion": row["completion_tokens"],
+                    "total": row["total_tokens"],
+                }
+                for row in token_rows
+            ]
+
             # Fetch DB size
             stats["db_size"] = await conn.fetchval("SELECT pg_size_pretty(pg_database_size(current_database()))")
             stats["connected"] = True

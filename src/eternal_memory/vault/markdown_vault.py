@@ -292,3 +292,19 @@ consolidation:
         # Simple append for now
         async with aiofiles.open(self.memory_path / "profile.md", "a") as f:
             await f.write(f"\n## {section}\n{safe_content}\n")
+
+    async def clear(self) -> None:
+        """
+        Wipe all data from the vault (memory and storage).
+        USE WITH CAUTION - this destroys all data.
+        """
+        import shutil
+        
+        # We wipe memory and storage, but keep config as it might contain app settings
+        if self.memory_path.exists():
+            shutil.rmtree(self.memory_path)
+        if self.storage_path.exists():
+            shutil.rmtree(self.storage_path)
+            
+        # Re-initialize basic structure
+        await self.initialize()

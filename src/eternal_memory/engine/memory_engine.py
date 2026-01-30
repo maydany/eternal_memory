@@ -74,6 +74,7 @@ class EternalMemorySystem(EternalMemoryEngine):
             api_key=self.config.llm.api_key,
             base_url=self.config.llm.base_url,
             model=self.config.llm.model,
+            usage_callback=self.repository.record_token_usage,
         )
         
         # Initialize pipelines
@@ -367,6 +368,29 @@ class EternalMemorySystem(EternalMemoryEngine):
             await self.initialize()
         
         return await self.schema.get_stats()
+
+    async def reset_system(self) -> None:
+        """
+        Wipe all data from the database and markdown vault.
+        USE WITH CAUTION - this destroys all data.
+        """
+        if not self._initialized:
+            await self.initialize()
+            
+        print("🚨 Resetting Eternal Memory System...")
+        
+        # 1. Drop and recreate database schema
+        # We need to disconnect repository first to close any active transactions
+        await self.repository.disconnect()
+        await self.schema.drop_all()
+        
+        # 2. Clear Markdown vault
+        await self.vault.clear()
+        
+        # 3. Re-initialize everything
+        self._initialized = False
+        await self.initialize()
+        print("✅ System reset complete.")
     
     async def __aenter__(self):
         """Async context manager entry."""
