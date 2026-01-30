@@ -14,8 +14,10 @@ from eternal_memory.engine.base import EternalMemoryEngine
 from eternal_memory.llm.client import LLMClient
 from eternal_memory.models.memory_item import MemoryItem
 from eternal_memory.models.retrieval import RetrievalResult
+from eternal_memory.models.retrieval import RetrievalResult
 from eternal_memory.pipelines.consolidate import ConsolidatePipeline
 from eternal_memory.pipelines.memorize import MemorizePipeline
+from eternal_memory.pipelines.flush import FlushPipeline
 from eternal_memory.pipelines.predict import PredictPipeline
 from eternal_memory.pipelines.retrieve import RetrievePipeline
 from eternal_memory.vault.markdown_vault import MarkdownVault
@@ -30,6 +32,7 @@ class EternalMemorySystem(EternalMemoryEngine):
     2. retrieve() - Recall memories (fast/deep modes)
     3. consolidate() - Maintain and archive
     4. predict_context() - Proactive context generation
+    5. buffer_and_flush() - Manage conversation buffer and periodic flush
     
     Usage:
         memory = EternalMemorySystem()
@@ -74,6 +77,11 @@ class EternalMemorySystem(EternalMemoryEngine):
         self._retrieve_pipeline: Optional[RetrievePipeline] = None
         self._consolidate_pipeline: Optional[ConsolidatePipeline] = None
         self._predict_pipeline: Optional[PredictPipeline] = None
+        self._flush_pipeline: Optional[FlushPipeline] = None
+        
+        # Conversation buffer state
+        self.conversation_buffer: list[dict] = []
+        self.FLUSH_THRESHOLD_TOKENS = 2000  # Default threshold
         
         self._initialized = False
     
@@ -118,10 +126,14 @@ class EternalMemorySystem(EternalMemoryEngine):
             max_category_items=100,
         )
         
-        self._predict_pipeline = PredictPipeline(
+            vault=self.vault,
+        )
+        
+        self._flush_pipeline = FlushPipeline(
             repository=self.repository,
             llm_client=self.llm,
             vault=self.vault,
+            memorize_pipeline=self._memorize_pipeline,
         )
         
         self._initialized = True
@@ -227,6 +239,49 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         return await self._predict_pipeline.execute(current_context)
     
+    async def add_to_buffer(self, role: str, content: str) -> None:
+        """Add message to conversation buffer."""
+        self.conversation_buffer.append({"role": role, "content": content})
+        
+    async def check_and_flush(self) -> List[MemoryItem]:
+        """
+        Check if buffer size exceeds threshold and flush if needed.
+        
+        Returns:
+            List of created MemoryItems (if flush occurred)
+        """
+        if not self._initialized:
+            await self.initialize()
+            
+        # Simple estimation: 1 token ~= 4 chars (rough English avg)
+        # For mixed Korean/English, 1 char might be closer to 1 token or more
+        # We use a conservative estimate: len(content) / 2
+        total_chars = sum(len(m["content"]) for m in self.conversation_buffer)
+        estimated_tokens = total_chars / 2
+        
+        if estimated_tokens < self.FLUSH_THRESHOLD_TOKENS:
+            return []
+            
+        return await self.flush_buffer()
+        
+    async def flush_buffer(self) -> List[MemoryItem]:
+        """Force flush the current buffer to permanent memory."""
+        if not self._initialized:
+            await self.initialize()
+            
+        if not self.conversation_buffer:
+            return []
+            
+        print(f"🔄 Flushing memory buffer ({len(self.conversation_buffer)} messages)...")
+        
+        # Execute flush pipeline
+        items = await self._flush_pipeline.execute(self.conversation_buffer)
+        
+        # Clear buffer after successful flush
+        self.conversation_buffer = []
+        
+        return items
+
     async def get_stats(self) -> dict:
         """
         Get system statistics.

@@ -223,13 +223,27 @@ Important: Always respond in the same language the user uses."""
         
         ai_response = completion.choices[0].message.content
         
-        # Step 3: Analyze and auto-memorize important information
-        memories_stored = []
+        # Step 3: Buffer messages and check for flush
+        # We buffer both the user message and the AI response
+        await system.add_to_buffer("user", request.message)
+        await system.add_to_buffer("assistant", ai_response)
         
-        # Use LLM to extract memorable facts
-        extraction_prompt = f"""Analyze this conversation and extract any important facts about the user that should be remembered.
-Only extract NEW, specific, factual information (like name, preferences, facts they shared).
-If there's nothing memorable, respond with "NONE".
+        # Check and flush if threshold reached
+        flushed_items = await system.check_and_flush()
+        if flushed_items:
+            for item in flushed_items:
+                memories_stored.append({
+                    "id": str(item.id),
+                    "content": item.content,
+                    "category_path": item.category_path,
+                    "source": "memory_flush"
+                })
+        
+        # Optional: Keep "per-message" extraction but make it very strict
+        # or rely solely on flush. For now, we'll keep it as a "fast path" for critical info.
+        extraction_prompt = f"""Analyze this conversation and extract CRITICAL facts about the user.
+Only extract facts that are EXTREMELY important to remember immediately (like a name change, urgent preference).
+If it can wait for a batch summary, respond with "NONE".
 
 User message: {request.message}
 
@@ -255,14 +269,14 @@ NONE"""
                     fact = line[5:].strip()
                     if fact:
                         try:
-                            item = await system.memorize(fact, {"source": "conversation"})
+                            item = await system.memorize(fact, {"source": "conversation_immediate"})
                             memories_stored.append({
                                 "id": str(item.id),
                                 "content": item.content,
                                 "category_path": item.category_path,
                             })
                         except Exception:
-                            pass  # Continue even if one memorization fails
+                            pass
         
         return ConversationResponse(
             response=ai_response,
