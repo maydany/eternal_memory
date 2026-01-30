@@ -5,7 +5,7 @@ Integrates all pipelines into a unified system that implements
 the EternalMemoryEngine abstract base class.
 """
 
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 from eternal_memory.config import MemoryConfig, load_config
 from eternal_memory.database.repository import MemoryRepository
@@ -126,6 +126,9 @@ class EternalMemorySystem(EternalMemoryEngine):
             max_category_items=100,
         )
         
+        self._predict_pipeline = PredictPipeline(
+            repository=self.repository,
+            llm_client=self.llm,
             vault=self.vault,
         )
         

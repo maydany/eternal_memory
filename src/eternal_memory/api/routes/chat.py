@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from eternal_memory.api.main import get_memory_system
+from eternal_memory.engine.context_pruner import ContextPruner
 
 router = APIRouter()
 
@@ -213,6 +214,17 @@ Important: Always respond in the same language the user uses."""
         # Add current user message
         messages.append({"role": "user", "content": request.message})
         
+        # --- Context Pruning ---
+        # Ensure we don't exceed model limits. 
+        # OpenAI models have varying limits, but we'll set a safe "working context" limit
+        # to ensure we leave room for the response.
+        # e.g., for 128k model, we might want to limit history to 32k or 64k to save cost/latency.
+        # But for 'gpt-4o-mini', it has 128k context.
+        # We'll set a conservative 32k token limit for input history to correspond with ContextPruner default.
+        pruner = ContextPruner(max_tokens=30000)
+        messages = pruner.prune_messages(messages)
+        # -----------------------
+
         # Generate response
         completion = await client.chat.completions.create(
             model=model,
