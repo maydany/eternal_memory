@@ -65,30 +65,21 @@ class RetrievePipeline:
         evolved_query: str,
     ) -> RetrievalResult:
         """
-        Fast mode: Vector similarity + Full-text search.
+        Fast mode: Hybrid search (Vector + Keyword).
         
-        - pgvector cosine similarity (threshold 0.8, top 5)
-        - Combined with keyword search
+        - Uses newly implemented hybrid_search (RRF)
         - Returns quickly without LLM reasoning
         """
         # Generate query embedding
         query_embedding = await self.llm.generate_embedding(evolved_query)
         
-        # Vector similarity search
-        vector_results = await self.repository.vector_search(
+        # Hybrid search
+        all_items = await self.repository.hybrid_search(
+            query_text=evolved_query,
             query_embedding=query_embedding,
-            limit=5,
-            threshold=0.3,  # More permissive for better recall
+            limit=10,
+            vector_weight=0.7,
         )
-        
-        # Full-text search for keyword matches
-        keyword_results = await self.repository.fulltext_search(
-            query=evolved_query,
-            limit=5,
-        )
-        
-        # Merge and deduplicate results
-        all_items = self._merge_results(vector_results, keyword_results)
         
         # Get related categories
         related_categories: Set[str] = set()
@@ -100,7 +91,7 @@ class RetrievePipeline:
         suggested_context = self._generate_quick_context(all_items)
         
         return RetrievalResult(
-            items=all_items[:10],  # Limit to top 10
+            items=all_items,
             related_categories=list(related_categories),
             suggested_context=suggested_context,
             query_evolved=evolved_query if evolved_query != original_query else None,
@@ -114,50 +105,36 @@ class RetrievePipeline:
         evolved_query: str,
     ) -> RetrievalResult:
         """
-        Deep mode: LLM reads category summaries and Markdown files.
+        Deep mode: LLM reasoning over DB results.
         
-        - Scans category summaries to identify relevant areas
-        - Reads actual Markdown files for detailed context
-        - Uses LLM to reason and synthesize answer
+        - Uses hybrid search for high recall
+        - Uses LLM to reason and synthesize answer from DB chunks
+        - STRICTLY DB-ONLY: No access to Markdown files
         """
-        # 1. Get all categories with summaries
-        categories = await self.repository.get_all_categories()
-        category_summaries = [
-            f"{c.path}: {c.summary or 'No summary'}"
-            for c in categories
-        ]
-        
-        # 2. First pass: vector search for initial candidates
+        # 1. High-recall hybrid search
         query_embedding = await self.llm.generate_embedding(evolved_query)
-        initial_results = await self.repository.vector_search(
+        initial_results = await self.repository.hybrid_search(
+            query_text=evolved_query,
             query_embedding=query_embedding,
-            limit=10,
-            threshold=0.2,
+            limit=20,  # Higher limit for deep mode
+            vector_weight=0.6,
         )
         
-        # 3. Identify relevant categories from results
+        # 2. Identify relevant categories from results
         relevant_categories: Set[str] = set()
         for item in initial_results:
             if item.category_path:
                 relevant_categories.add(item.category_path)
-                # Also add parent categories
-                parts = item.category_path.split("/")
-                for i in range(len(parts)):
-                    relevant_categories.add("/".join(parts[:i+1]))
         
-        # 4. Read Markdown files for deeper context
-        markdown_context: List[str] = []
-        for cat_path in list(relevant_categories)[:5]:  # Limit to 5 categories
-            content = await self.vault.read_category_file(cat_path)
-            if content:
-                markdown_context.append(f"[{cat_path}]\n{content[:500]}...")
-        
-        # 5. LLM reasoning to synthesize answer
+        # 3. LLM reasoning to synthesize answer
+        # We only use the content from the DB items
         item_contents = [item.content for item in initial_results]
+        
+        # We pass empty category summaries to focus strict attention on specific facts
         reasoned_answer = await self.llm.reason_from_context(
             query=evolved_query,
             context_items=item_contents,
-            category_summaries=category_summaries[:10],
+            category_summaries=[], 
         )
         
         return RetrievalResult(

@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import ChatPage from './pages/ChatPage'
 import VaultPage from './pages/VaultPage'
 import SettingsPage from './pages/SettingsPage'
+import DatabasePage from './pages/DatabasePage'
 
 function App() {
   return (
@@ -11,6 +12,7 @@ function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<ChatPage />} />
           <Route path="vault" element={<VaultPage />} />
+          <Route path="database" element={<DatabasePage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>

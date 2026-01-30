@@ -27,7 +27,7 @@ class MemoryRepository:
     """
     
     def __init__(self, connection_string: str = None):
-        self.connection_string = connection_string or "postgresql://localhost/eternal_memory"
+        self.connection_string = connection_string or "postgresql://127.0.0.1/eternal_memory"
         self._pool: Optional[asyncpg.Pool] = None
     
     async def connect(self) -> None:
@@ -80,16 +80,17 @@ class MemoryRepository:
     
     # ========== Category Operations ==========
     
-    async def create_category(self, category: Category) -> Category:
+    async def create_category(self, category: Category, embedding: Optional[List[float]] = None) -> Category:
         """Create a new category."""
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO categories (id, name, description, parent_id, summary, path, last_accessed)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO categories (id, name, description, parent_id, summary, path, embedding, last_accessed)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 ON CONFLICT (path) DO UPDATE SET
                     description = EXCLUDED.description,
                     summary = EXCLUDED.summary,
+                    embedding = COALESCE(EXCLUDED.embedding, categories.embedding),
                     last_accessed = NOW()
                 """,
                 category.id,
@@ -98,9 +99,44 @@ class MemoryRepository:
                 category.parent_id,
                 category.summary,
                 category.path,
+                str(embedding) if embedding else None,
                 category.last_accessed,
             )
         return category
+
+    async def vector_search_categories(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        threshold: float = 0.3,
+    ) -> List[Category]:
+        """Search categories by semantic similarity."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT *, 1 - (embedding <=> $1::vector) as similarity
+                FROM categories
+                WHERE embedding IS NOT NULL AND 1 - (embedding <=> $1::vector) >= $2
+                ORDER BY embedding <=> $1::vector
+                LIMIT $3
+                """,
+                str(query_embedding),
+                threshold,
+                limit,
+            )
+            
+            return [
+                Category(
+                    id=row["id"],
+                    name=row["name"],
+                    description=row["description"],
+                    parent_id=row["parent_id"],
+                    summary=row["summary"],
+                    path=row["path"],
+                    last_accessed=row["last_accessed"],
+                )
+                for row in rows
+            ]
     
     async def get_category_by_path(self, path: str) -> Optional[Category]:
         """Get a category by its path."""
@@ -160,14 +196,15 @@ class MemoryRepository:
         category_id: Optional[UUID] = None,
     ) -> MemoryItem:
         """Create a new memory item with its embedding vector."""
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO memory_items 
-                (id, category_id, resource_id, content, embedding, type, importance, confidence, created_at, last_accessed)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                """,
-                item.id,
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO memory_items 
+                    (id, category_id, resource_id, content, embedding, type, importance, confidence, created_at, last_accessed)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    """,
+                    item.id,
                 category_id,
                 item.source_resource_id,
                 item.content,
@@ -178,6 +215,9 @@ class MemoryRepository:
                 item.created_at,
                 item.last_accessed,
             )
+        except Exception as e:
+            print(f"DEBUG ERROR: Failed to insert memory item: {e}", flush=True)
+            raise e
         return item
     
     async def get_memory_item(self, item_id: UUID) -> Optional[MemoryItem]:
@@ -259,6 +299,78 @@ class MemoryRepository:
                 items.append(item)
                 # Update access timestamp
                 await self.update_last_accessed(row["id"])
+            
+            return items
+
+    async def hybrid_search(
+        self,
+        query_text: str,
+        query_embedding: List[float],
+        limit: int = 5,
+        vector_weight: float = 0.7,
+    ) -> List[MemoryItem]:
+        """
+        Hybrid search combining Vector Similarity (Cosine) and Keyword Match (Trigram).
+        
+        Args:
+            query_text: Raw text for keyword search
+            query_embedding: Embedding vector for semantic search
+            limit: Number of results
+            vector_weight: Weight for vector score (0.0 to 1.0)
+        
+        Returns:
+            List of memory items sorted by combined score
+        """
+        keyword_weight = 1.0 - vector_weight
+        
+        async with self._pool.acquire() as conn:
+            # Combined query using CTEs for normalization
+            rows = await conn.fetch(
+                """
+                WITH vector_scores AS (
+                    SELECT id, 1 - (embedding <=> $2::vector) as v_score
+                    FROM memory_items
+                    WHERE 1 - (embedding <=> $2::vector) > 0.5  -- Basic semantic filter
+                ),
+                keyword_scores AS (
+                    SELECT id, similarity(content, $1) as k_score
+                    FROM memory_items
+                    WHERE content % $1  -- Trigram match operator
+                )
+                SELECT mi.*, c.path as category_path,
+                       COALESCE(v.v_score, 0) as v_score,
+                       COALESCE(k.k_score, 0) as k_score,
+                       (COALESCE(v.v_score, 0) * $3 + COALESCE(k.k_score, 0) * $4) as final_score
+                FROM memory_items mi
+                LEFT JOIN categories c ON mi.category_id = c.id
+                LEFT JOIN vector_scores v ON mi.id = v.id
+                LEFT JOIN keyword_scores k ON mi.id = k.id
+                WHERE (COALESCE(v.v_score, 0) * $3 + COALESCE(k.k_score, 0) * $4) > 0.0
+                ORDER BY final_score DESC
+                LIMIT $5
+                """,
+                query_text,
+                str(query_embedding),
+                vector_weight,
+                keyword_weight,
+                limit,
+            )
+            
+            items = []
+            for row in rows:
+                item = MemoryItem(
+                    id=row["id"],
+                    content=row["content"],
+                    category_path=row["category_path"] or "",
+                    type=MemoryType(row["type"]),
+                    confidence=row["confidence"], # Score is separate
+                    importance=row["importance"],
+                    source_resource_id=row["resource_id"],
+                    created_at=row["created_at"],
+                    last_accessed=row["last_accessed"],
+                )
+                # Attach score metadata if needed, or just return sorted
+                items.append(item)
             
             return items
     
@@ -407,3 +519,44 @@ class MemoryRepository:
                 )
                 for row in rows
             ]
+
+    async def list_items(
+        self,
+        limit: int = 50,
+        offset: int = 0
+    ) -> List[MemoryItem]:
+        """
+        List memory items with pagination, sorted by creation date (newest first).
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT mi.*, c.path as category_path
+                FROM memory_items mi
+                LEFT JOIN categories c ON mi.category_id = c.id
+                ORDER BY mi.created_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit,
+                offset,
+            )
+            
+            return [
+                MemoryItem(
+                    id=row["id"],
+                    content=row["content"],
+                    category_path=row["category_path"] or "",
+                    type=MemoryType(row["type"]),
+                    confidence=row["confidence"],
+                    importance=row["importance"],
+                    source_resource_id=row["resource_id"],
+                    created_at=row["created_at"],
+                    last_accessed=row["last_accessed"],
+                )
+                for row in rows
+            ]
+
+    async def count_items(self) -> int:
+        """Get total number of memory items."""
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval("SELECT COUNT(*) FROM memory_items")

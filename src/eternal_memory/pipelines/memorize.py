@@ -64,56 +64,29 @@ class MemorizePipeline:
         )
         await self.repository.create_resource(resource)
         
-        # 2. Get existing categories for context
-        existing_categories = await self.repository.get_all_categories()
-        category_paths = [c.path for c in existing_categories]
-        
-        # 3. Extract facts using LLM
-        extracted_facts = await self.llm.extract_facts(text, category_paths)
+        # 2. Extract facts using LLM (No longer needs all category_paths)
+        extracted_facts = await self.llm.extract_facts(text, [])
         
         if not extracted_facts:
             # No meaningful facts extracted, still log to timeline
             await self.vault.append_to_timeline(text, datetime.now())
             return []
         
-        # 4. Process each extracted fact
+        # 3. Process each extracted fact
         for fact in extracted_facts:
             content = fact.get("content", "")
             if not content:
                 continue
             
-            # Get or create category
-            category_path = fact.get("category_path", "knowledge/general")
-            category = await self._ensure_category(category_path)
-            
-            # Create memory item
-            memory_item = MemoryItem(
+            # Smart Categorization is now part of store_single_memory or process_fact
+            item = await self.store_single_memory(
                 content=content,
-                category_path=category_path,
-                type=MemoryType(fact.get("type", "fact")),
+                fact_type=fact.get("type", "fact"),
                 importance=float(fact.get("importance", 0.5)),
-                source_resource_id=resource.id,
+                metadata={"resource_id": str(resource.id)},
+                skip_resource=True # Resource already created
             )
-            
-            # 5. Generate embedding
-            embedding = await self.llm.generate_embedding(content)
-            
-            # 6. Save to database
-            await self.repository.create_memory_item(
-                item=memory_item,
-                embedding=embedding,
-                category_id=category.id,
-            )
-            
-            # 7. Sync to Markdown vault
-            await self.vault.append_to_category(
-                category_path=category_path,
-                content=content,
-                memory_type=memory_item.type,
-                timestamp=memory_item.created_at,
-            )
-            
-            created_items.append(memory_item)
+            created_items.append(item)
         
         # 8. Update timeline
         await self.vault.append_to_timeline(
@@ -122,6 +95,118 @@ class MemorizePipeline:
         )
         
         return created_items
+
+    async def process_fact(
+        self,
+        content: str,
+        category_path: str,
+        fact_type: str,
+        importance: float,
+        resource_id: uuid4,
+        embedding: Optional[List[float]] = None,
+    ) -> MemoryItem:
+        """Process and store a single fact (no LLM extraction)."""
+        # Get or create category
+        category = await self._ensure_category(category_path)
+        
+        # Create memory item
+        memory_item = MemoryItem(
+            content=content,
+            category_path=category_path,
+            type=MemoryType(fact_type),
+            importance=importance,
+            source_resource_id=resource_id,
+        )
+        
+        # Generate embedding if not provided
+        if not embedding:
+            embedding = await self.llm.generate_embedding(content)
+        
+        # Save to database
+        await self.repository.create_memory_item(
+            item=memory_item,
+            embedding=embedding,
+            category_id=category.id,
+        )
+        
+        # Sync to Markdown vault
+        await self.vault.append_to_category(
+            category_path=category_path,
+            content=content,
+            memory_type=memory_item.type,
+            timestamp=memory_item.created_at,
+        )
+        
+        return memory_item
+
+    async def store_single_memory(
+        self,
+        content: str,
+        category_path: Optional[str] = None,
+        fact_type: str = "fact",
+        importance: float = 0.5,
+        metadata: Optional[dict] = None,
+        skip_resource: bool = False,
+    ) -> MemoryItem:
+        """Store a single memory directly with smart categorization."""
+        metadata = metadata or {}
+        
+        # 1. Create resource if needed
+        resource_id = metadata.get("resource_id")
+        if not skip_resource:
+            resource = Resource(
+                uri=metadata.get("uri", f"conversation/{datetime.now().isoformat()}"),
+                modality=metadata.get("modality", "conversation"),
+                content=content,
+                metadata=metadata,
+            )
+            await self.repository.create_resource(resource)
+            resource_id = resource.id
+        
+        # 2. Check for duplicates (using pre-calculated embedding)
+        embedding = await self.llm.generate_embedding(content)
+        similar_items = await self.repository.vector_search(
+            query_embedding=embedding,
+            limit=1,
+            threshold=0.95
+        )
+        
+        if similar_items:
+            existing = similar_items[0]
+            await self.repository.update_last_accessed(existing.id)
+            return existing
+
+        # 3. Smart Categorization (if no path provided)
+        if not category_path:
+            # Find candidate categories semantically
+            candidates = await self.repository.vector_search_categories(
+                query_embedding=embedding,
+                limit=5,
+                threshold=0.2
+            )
+            candidate_paths = [c.path for c in candidates]
+            
+            # Let LLM refine the path
+            category_path = await self.llm.suggest_category(content, candidate_paths)
+
+        # 4. Process and persist
+        item = await self.process_fact(
+            content=content,
+            category_path=category_path,
+            fact_type=fact_type,
+            importance=importance,
+            resource_id=resource_id,
+            embedding=embedding
+        )
+        
+        # 5. Update timeline
+        if not skip_resource:
+            await self.vault.append_to_timeline(
+                f"Stored memory: {content[:100]}...",
+                datetime.now(),
+            )
+        
+        return item
     
     async def _ensure_category(self, path: str) -> Category:
         """
@@ -143,12 +228,15 @@ class MemorizePipeline:
             if existing:
                 parent_id = existing.id
             else:
+                # Generate embedding for the new category path/name
+                cat_embedding = await self.llm.generate_embedding(parts[i])
+                
                 category = Category(
                     name=parts[i],
                     path=current_path,
                     parent_id=parent_id,
                 )
-                await self.repository.create_category(category)
+                await self.repository.create_category(category, embedding=cat_embedding)
                 
                 # Create corresponding markdown file
                 await self.vault.ensure_category_file(current_path)

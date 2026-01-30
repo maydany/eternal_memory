@@ -11,6 +11,7 @@ import asyncpg
 SCHEMA_SQL = """
 -- Enable vector extension
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- 1. Resources: Raw Data Source
 CREATE TABLE IF NOT EXISTS resources (
@@ -30,6 +31,7 @@ CREATE TABLE IF NOT EXISTS categories (
     parent_id UUID REFERENCES categories(id),
     summary TEXT,                               -- High-level summary of contained items
     path TEXT NOT NULL UNIQUE,                  -- Full path like 'knowledge/coding/python'
+    embedding vector(1536),                     -- Category embedding for semantic matching
     last_accessed TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -47,23 +49,13 @@ CREATE TABLE IF NOT EXISTS memory_items (
     last_accessed TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Full Text Search column (PostgreSQL 12+ requires explicit ADD COLUMN)
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name = 'memory_items' AND column_name = 'fts_content'
-    ) THEN
-        ALTER TABLE memory_items ADD COLUMN fts_content TSVECTOR 
-            GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
-    END IF;
-END $$;
-
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_memory_embedding 
     ON memory_items USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX IF NOT EXISTS idx_memory_fts 
-    ON memory_items USING GIN (fts_content);
+CREATE INDEX IF NOT EXISTS idx_category_embedding 
+    ON categories USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_memory_trgm 
+    ON memory_items USING gin (content gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_category_parent 
     ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_category_path 

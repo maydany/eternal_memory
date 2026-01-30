@@ -12,7 +12,7 @@ from eternal_memory.database.repository import MemoryRepository
 from eternal_memory.database.schema import DatabaseSchema
 from eternal_memory.engine.base import EternalMemoryEngine
 from eternal_memory.llm.client import LLMClient
-from eternal_memory.models.memory_item import MemoryItem
+from eternal_memory.models.memory_item import Category, MemoryItem
 from eternal_memory.models.retrieval import RetrievalResult
 from eternal_memory.models.retrieval import RetrievalResult
 from eternal_memory.pipelines.consolidate import ConsolidatePipeline
@@ -87,7 +87,7 @@ class EternalMemorySystem(EternalMemoryEngine):
         self.conversation_buffer: list[dict] = []
         # Conversation buffer state
         self.conversation_buffer: list[dict] = []
-        self.FLUSH_THRESHOLD_TOKENS = 2000  # Default threshold
+        self.FLUSH_THRESHOLD_TOKENS = 1000  # Reasonable threshold for production
         
         # Scheduler
         self.scheduler = CronScheduler()
@@ -113,6 +113,24 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         # Initialize vault
         await self.vault.initialize()
+        
+        # Ensure standard root categories exist
+        standard_roots = [
+            ("Knowledge", "knowledge", "General facts and information"),
+            ("Personal", "personal", "Personal preferences, feelings, and lifestyle"),
+            ("Projects", "projects", "Work, code, and side projects"),
+            ("Preferences", "preferences", "User-specific settings and preferences"),
+        ]
+        
+        for name, path, desc in standard_roots:
+            # We don't use MemorizePipeline here to avoid circular dependencies or extra LLM calls
+            # Just a simple ensure logic
+            existing = await self.repository.get_category_by_path(path)
+            if not existing:
+                emb = await self.llm.generate_embedding(name)
+                cat = Category(name=name, path=path, description=desc)
+                await self.repository.create_category(cat, embedding=emb)
+                await self.vault.ensure_category_file(path)
         
         # Initialize pipelines
         self._memorize_pipeline = MemorizePipeline(
@@ -220,6 +238,22 @@ class EternalMemorySystem(EternalMemoryEngine):
                 category_path="timeline",
                 type="fact",
             )
+
+    async def save_fact(
+        self,
+        content: str,
+        metadata: Optional[dict] = None,
+        importance: float = 0.5,
+    ) -> MemoryItem:
+        """Store a single fact directly."""
+        if not self._initialized:
+            await self.initialize()
+            
+        return await self._memorize_pipeline.store_single_memory(
+            content=content,
+            metadata=metadata,
+            importance=importance,
+        )
     
     async def retrieve(
         self,

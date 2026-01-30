@@ -218,6 +218,44 @@ Focus on actionable predictions, not just observations."""
         
         return response.choices[0].message.content
     
+    async def suggest_category(
+        self,
+        fact_content: str,
+        candidate_categories: List[str],
+    ) -> str:
+        """
+        Determine the best category path for a fact given some candidates.
+        Allows for intelligent fuzzy matching or creating new sub-branches.
+        """
+        candidates = "\n".join([f"- {c}" for c in candidate_categories])
+        
+        prompt = f"""You are a memory librarian. Given a fact, determine the most logical category path.
+        
+Fact: "{fact_content}"
+
+Candidates (Existing Categories):
+{candidates if candidates else "None useful found."}
+
+Rules:
+1. If an existing category is a perfect or very strong match, use it.
+2. If the fact belongs to an existing category but needs a more specific sub-branch, append it: e.g. "knowledge/coding" -> "knowledge/coding/python".
+3. If no category fits, create a new one under a standard root:
+   - knowledge/ (for general info, facts, data)
+   - personal/ (for user's feelings, family, habits, lifestyle)
+   - projects/ (for work, code, side projects)
+   - timeline/ (for specific ephemeral events)
+4. Use English for category names, lowercase, /-separated hierarchy.
+
+Category path (ONLY the path):"""
+
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        
+        return response.choices[0].message.content.strip().lower()
+
     async def assign_category(
         self,
         content: str,
@@ -238,7 +276,7 @@ Existing categories:
 Rules:
 - Use existing category if appropriate
 - Create new path if needed (format: top/sub/detail)
-- Standard top-level: knowledge/, personal/, projects/, timeline/
+- Standard top-level: knowledge/, personal/, projects/, etc.
 - Return ONLY the category path, nothing else
 
 Category path:"""
@@ -250,3 +288,20 @@ Category path:"""
         )
         
         return response.choices[0].message.content.strip()
+
+    async def complete(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 1000,
+    ) -> str:
+        """
+        Generate a straight completion for a prompt.
+        """
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content

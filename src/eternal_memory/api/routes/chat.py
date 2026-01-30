@@ -148,8 +148,12 @@ class ConversationResponse(BaseModel):
     processing_info: dict
 
 
+from fastapi import APIRouter, HTTPException, BackgroundTasks
+
+# ...
+
 @router.post("/conversation", response_model=ConversationResponse)
-async def conversation(request: ConversationRequest):
+async def conversation(request: ConversationRequest, background_tasks: BackgroundTasks):
     """
     Natural conversation with automatic memory management.
     
@@ -166,6 +170,7 @@ async def conversation(request: ConversationRequest):
         
         # Step 1: Retrieve relevant memories
         memories_retrieved = []
+        memories_stored = []
         memory_context = ""
         
         try:
@@ -240,16 +245,9 @@ Important: Always respond in the same language the user uses."""
         await system.add_to_buffer("user", request.message)
         await system.add_to_buffer("assistant", ai_response)
         
-        # Check and flush if threshold reached
-        flushed_items = await system.check_and_flush()
-        if flushed_items:
-            for item in flushed_items:
-                memories_stored.append({
-                    "id": str(item.id),
-                    "content": item.content,
-                    "category_path": item.category_path,
-                    "source": "memory_flush"
-                })
+        # Check and flush if threshold reached (Background Task)
+        # We run this in the background to avoid blocking the user response
+        background_tasks.add_task(system.check_and_flush)
         
         # Optional: Keep "per-message" extraction but make it very strict
         # or rely solely on flush. For now, we'll keep it as a "fast path" for critical info.
@@ -281,14 +279,17 @@ NONE"""
                     fact = line[5:].strip()
                     if fact:
                         try:
-                            item = await system.memorize(fact, {"source": "conversation_immediate"})
+                            # Direct storage without re-extraction
+                            item = await system.save_fact(fact, {"source": "conversation_immediate"})
+                            
                             memories_stored.append({
                                 "id": str(item.id),
                                 "content": item.content,
                                 "category_path": item.category_path,
                             })
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            # Log but don't crash
+                            print(f"ERROR: Memorize failed: {e}")
         
         return ConversationResponse(
             response=ai_response,

@@ -80,10 +80,10 @@ If there are no enduring facts to save, respond with "NONE".
                 
                 # Use standard memorize pipeline to store this fact
                 # This handles categorization, embedding, and saving
-                items = await self.memorize_pipeline.execute(
-                    text=line,
+                item = await self.memorize_pipeline.store_single_memory(
+                    content=line,
                     metadata={"source": "memory_flush", "timestamp": datetime.now().isoformat()}
                 )
-                created_items.extend(items)
+                created_items.append(item)
                 
         return created_items
