@@ -31,6 +31,8 @@ class LLMClient:
         base_url: Optional[str] = None,
         model: str = "gpt-4o-mini",
         usage_callback: Optional[callable] = None,
+        enable_embedding_cache: bool = True,
+        max_cache_size: int = 1000,
     ):
         self.model = model
         self.usage_callback = usage_callback
@@ -38,6 +40,16 @@ class LLMClient:
             api_key=api_key or os.getenv("OPENAI_API_KEY"),
             base_url=base_url,
         )
+        
+        # Embedding cache (LRU)
+        self.enable_embedding_cache = enable_embedding_cache
+        self.max_cache_size = max_cache_size
+        self._embedding_cache: dict[str, List[float]] = {}
+        self._cache_order: list[str] = []  # For LRU tracking
+        
+        # Cache statistics
+        self._cache_hits = 0
+        self._cache_misses = 0
     
     async def _report_usage(self, response: Any, model_override: str = None):
         """Helper to report token usage via callback."""
@@ -134,16 +146,72 @@ Return ONLY the clarified query, nothing else."""
     
     async def generate_embedding(self, text: str) -> List[float]:
         """
-        Generate embedding vector for text using OpenAI's embedding model.
+        Generate embedding vector for text with caching.
         
-        Returns 1536-dimensional vector compatible with ada-002.
+        Uses text-embedding-ada-002 model. Caches results to reduce API calls.
         """
+        # Check cache first
+        if self.enable_embedding_cache and text in self._embedding_cache:
+            self._cache_hits += 1
+            self._touch_cache(text)  # Update LRU order
+            return self._embedding_cache[text]
+        
+        # Cache miss - call API
+        self._cache_misses += 1
         response = await self.client.embeddings.create(
             model="text-embedding-ada-002",
             input=text,
         )
+        
+        # Report usage for embeddings model
         await self._report_usage(response, model_override="text-embedding-ada-002")
-        return response.data[0].embedding
+        
+        embedding = response.data[0].embedding
+        
+        # Store in cache
+        if self.enable_embedding_cache:
+            self._add_to_cache(text, embedding)
+        
+        return embedding
+    
+    def _touch_cache(self, key: str) -> None:
+        """Update LRU order for cache hit."""
+        if key in self._cache_order:
+            self._cache_order.remove(key)
+        self._cache_order.append(key)
+    
+    def _add_to_cache(self, key: str, value: List[float]) -> None:
+        """Add to cache with LRU eviction."""
+        # Evict oldest if cache full
+        if len(self._embedding_cache) >= self.max_cache_size:
+            if self._cache_order:
+                oldest = self._cache_order.pop(0)
+                del self._embedding_cache[oldest]
+        
+        # Add new entry
+        self._embedding_cache[key] = value
+        self._cache_order.append(key)
+    
+    def get_cache_stats(self) -> dict:
+        """Get cache hit/miss statistics."""
+        total = self._cache_hits + self._cache_misses
+        hit_rate = (self._cache_hits / total * 100) if total > 0 else 0
+        
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "total_requests": total,
+            "hit_rate_percent": round(hit_rate, 2),
+            "cache_size": len(self._embedding_cache),
+            "max_cache_size": self.max_cache_size,
+        }
+    
+    def clear_embedding_cache(self) -> None:
+        """Clear the embedding cache."""
+        self._embedding_cache.clear()
+        self._cache_order.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
     
     async def reason_from_context(
         self,
