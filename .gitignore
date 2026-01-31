@@ -74,6 +74,7 @@ artifacts/
 .gemini/
 tmp_openclaw/
 user_memory/
+# Setting directory - exclude all except examples
 setting/*
 !setting/.env.example
 

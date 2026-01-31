@@ -15,7 +15,8 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-CONFIG_PATH = Path.cwd() / "user_memory" / "db_setting" / "memory_config.yaml"
+CONFIG_PATH = Path.cwd() / "user_memory" / "config" / "memory_config.yaml"
+SYSTEM_PROMPT_PATH = Path.cwd() / "setting" / "system_prompt.txt"
 
 
 class LLMSettings(BaseModel):
@@ -67,8 +68,14 @@ async def get_settings():
             if "llm" in config:
                 settings["llm"]["provider"] = config["llm"].get("provider", "openai")
                 settings["llm"]["model"] = config["llm"].get("model", "gpt-4o-mini")
-            
-            settings["system_prompt"] = config.get("system_prompt")
+        except Exception:
+            pass
+    
+    # Load system prompt from dedicated file
+    if SYSTEM_PROMPT_PATH.exists():
+        try:
+            async with aiofiles.open(SYSTEM_PROMPT_PATH, "r") as f:
+                settings["system_prompt"] = await f.read()
         except Exception:
             pass
     
@@ -184,21 +191,18 @@ async def test_connection():
 async def update_system_prompt(prompt: str):
     """
     Update the system prompt for conversations.
+    
+    Saves to setting/system_prompt.txt (not tracked by Git).
     """
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    # Create setting directory if it doesn't exist
+    SYSTEM_PROMPT_PATH.parent.mkdir(parents=True, exist_ok=True)
     
-    # Load existing config
-    config = {}
-    if CONFIG_PATH.exists():
-        async with aiofiles.open(CONFIG_PATH, "r") as f:
-            config = yaml.safe_load(await f.read()) or {}
+    # Save system prompt to dedicated file
+    async with aiofiles.open(SYSTEM_PROMPT_PATH, "w") as f:
+        await f.write(prompt)
     
-    # Update system prompt
-    config["system_prompt"] = prompt
-    
-    # Save
-    async with aiofiles.open(CONFIG_PATH, "w") as f:
-        await f.write(yaml.dump(config, allow_unicode=True))
+    # Set secure permissions
+    os.chmod(SYSTEM_PROMPT_PATH, 0o600)
     
     return {"success": True, "message": "System prompt updated"}
 

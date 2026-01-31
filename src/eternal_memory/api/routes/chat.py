@@ -4,8 +4,11 @@ Chat API Routes
 Endpoints for memory-augmented conversation.
 """
 
+import os
+from pathlib import Path
 from typing import Literal, Optional
 
+import aiofiles
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -13,6 +16,8 @@ from eternal_memory.api.main import get_memory_system
 from eternal_memory.engine.context_pruner import ContextPruner
 
 router = APIRouter()
+
+SYSTEM_PROMPT_PATH = Path.cwd() / "setting" / "system_prompt.txt"
 
 
 class ChatMessage(BaseModel):
@@ -195,14 +200,17 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
         model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         
         client = AsyncOpenAI(api_key=api_key)
+        # Load system prompt from file or use default
+        system_prompt = "You are a helpful AI assistant with persistent memory.\nYou remember information about the user across conversations.\nWhen the user shares personal information, acknowledge it warmly and remember it.\nWhen you have relevant memories, use them naturally in your responses.\n\nImportant: Always respond in the same language the user uses."
+        if SYSTEM_PROMPT_PATH.exists():
+            try:
+                async with aiofiles.open(SYSTEM_PROMPT_PATH, "r") as f:
+                    custom_prompt = await f.read()
+                    if custom_prompt.strip():
+                        system_prompt = custom_prompt.strip()
+            except Exception:
+                pass  # Use default if file read fails
         
-        system_prompt = """You are a helpful AI assistant with persistent memory.
-You remember information about the user across conversations.
-When the user shares personal information, acknowledge it warmly and remember it.
-When you have relevant memories, use them naturally in your responses.
-
-Important: Always respond in the same language the user uses."""
-
         messages = [{"role": "system", "content": system_prompt}]
         
         # Add memory context if available
