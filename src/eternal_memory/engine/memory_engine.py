@@ -138,12 +138,19 @@ class EternalMemorySystem(EternalMemoryEngine):
             ("Preferences", "preferences", "User-specific settings and preferences"),
         ]
         
+        # Find which categories need to be created
+        new_categories = []
         for name, path, desc in standard_roots:
-            # We don't use MemorizePipeline here to avoid circular dependencies or extra LLM calls
-            # Just a simple ensure logic
             existing = await self.repository.get_category_by_path(path)
             if not existing:
-                emb = await self.llm.generate_embedding(name)
+                new_categories.append((name, path, desc))
+        
+        # Batch create all new categories at once
+        if new_categories:
+            names = [name for name, _, _ in new_categories]
+            embeddings = await self.llm.batch_generate_embeddings(names)
+            
+            for (name, path, desc), emb in zip(new_categories, embeddings):
                 cat = Category(name=name, path=path, description=desc)
                 await self.repository.create_category(cat, embedding=emb)
                 await self.vault.ensure_category_file(path)

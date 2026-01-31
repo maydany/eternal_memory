@@ -307,19 +307,32 @@ async def job_embedding_refresh(system: "EternalMemorySystem"):
     try:
         # Get oldest items (by created_at) that might have outdated embeddings
         # This is a placeholder - in production, you'd track embedding model versions
-        old_items = await system.repository.get_stale_items(days_threshold=90, limit=20)
+        stale_items = await system.repository.get_stale_items(days_threshold=90, limit=20)
         
-        refreshed_count = 0
-        for item in old_items:
-            # Re-generate embedding
-            new_embedding = await system.llm.generate_embedding(item.content)
+        if not stale_items:
+            logger.info("No stale items found for embedding refresh.")
+            return
+        
+        # Collect all items that need embedding updates
+        items_to_update = []
+        for item in stale_items:
+            if not item.embedding or len(item.embedding) == 0:
+                items_to_update.append(item)
+        
+        if items_to_update:
+            logger.info(f"Batch updating {len(items_to_update)} item embeddings...")
             
-            # Update in database (would need a new method in repository)
-            # For now, just log
-            logger.debug(f"Would refresh embedding for item: {item.id}")
-            refreshed_count += 1
-        
-        logger.info(f"Embedding Refresh complete: processed {refreshed_count} items.")
+            # Batch generate all embeddings at once
+            contents = [item.content for item in items_to_update]
+            new_embeddings = await system.llm.batch_generate_embeddings(contents)
+            
+            # Update each item with its new embedding
+            for item, new_embedding in zip(items_to_update, new_embeddings):
+                await system.repository.update_memory_item_embedding(item.id, new_embedding)
+            
+            logger.info(f"Embedding Refresh complete: processed {len(items_to_update)} items.")
+        else:
+            logger.info("No items found requiring embedding updates.")
         
     except Exception as e:
         logger.error(f"Embedding Refresh failed: {e}")
