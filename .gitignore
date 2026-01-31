@@ -72,3 +72,9 @@ node_modules/
 brain/
 artifacts/
 .gemini/
+tmp_openclaw/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
