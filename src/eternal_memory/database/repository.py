@@ -429,7 +429,7 @@ class MemoryRepository:
                     last_accessed=row["last_accessed"],
                 )
                 # Attach score metadata if needed, or just return sorted
-            items.append(item)
+                items.append(item)  # Fix: Moved inside loop
             
             return items
 
