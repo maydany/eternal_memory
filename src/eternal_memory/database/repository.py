@@ -483,7 +483,7 @@ class MemoryRepository:
                         mi.importance as importance_score
                     FROM memory_items mi
                     LEFT JOIN categories c ON mi.category_id = c.id
-                    WHERE mi.is_active = TRUE
+                    WHERE COALESCE(mi.is_active, TRUE) = TRUE
                       AND 1 - (mi.embedding <=> $1::vector) >= $6
                 )
                 SELECT *,

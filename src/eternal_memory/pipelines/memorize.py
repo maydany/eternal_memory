@@ -351,7 +351,18 @@ class MemorizePipeline:
                             new_object=triple.object,
                         )
                         
-                        # Supersede conflicting triples
+                        # Generate embeddings for the object
+                        object_embedding = await self.llm.generate_embedding(triple.object)
+                        
+                        # Store the new triple FIRST (before superseding old ones)
+                        # This is required because superseded_by is a FK reference
+                        await self.repository.create_triple(
+                            triple=triple,
+                            subject_embedding=None,  # Subject embedding optional
+                            object_embedding=object_embedding,
+                        )
+                        
+                        # THEN supersede conflicting triples (now the FK reference exists)
                         for conflict in conflicts:
                             # Check if truly conflicting
                             if conflict.object.lower() != triple.object.lower():
@@ -374,16 +385,6 @@ class MemorizePipeline:
                                     f"🔀 Contradicting triple: {conflict.predicate} → {triple.predicate}",
                                     datetime.now(),
                                 )
-                        
-                        # Generate embeddings for the object
-                        object_embedding = await self.llm.generate_embedding(triple.object)
-                        
-                        # Store the new triple
-                        await self.repository.create_triple(
-                            triple=triple,
-                            subject_embedding=None,  # Subject embedding optional
-                            object_embedding=object_embedding,
-                        )
                     
                 except Exception as e:
                     # Triple extraction is optional, don't fail

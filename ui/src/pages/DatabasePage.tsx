@@ -200,10 +200,12 @@ export default function DatabasePage() {
   useEffect(() => {
     if (activeTab === 'memories') {
       fetchData();
-    } else {
+    } else if (activeTab === 'tasks') {
       fetchTasks();
+    } else if (activeTab === 'triples') {
+      fetchTriples();
     }
-  }, [page, activeTab]);
+  }, [page, triplesPage, activeTab]);
 
   // Auto-refresh tasks
   useEffect(() => {

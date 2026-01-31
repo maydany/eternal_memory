@@ -34,6 +34,46 @@ export interface VaultTree {
   tree: FileNode[];
 }
 
+export interface ProcessStep {
+  step: string;
+  status: 'pending' | 'running' | 'completed' | 'skipped' | 'error';
+  duration_ms?: number;
+  details?: {
+    mode?: string;
+    model?: string;
+    items_found?: number;
+    categories_matched?: string[];
+    retrieved_items?: { id: string; content: string; category_path: string; confidence: number }[];
+    system_prompt_length?: number;
+    system_prompt_preview?: string;
+    memory_context_length?: number;
+    memory_context_preview?: string;
+    history_messages?: number;
+    total_messages?: number;
+    pruned_messages?: number;
+    tokens_prompt?: number;
+    tokens_completion?: number;
+    tokens_total?: number;
+    response_preview?: string;
+    facts_found?: number;
+    extraction_model?: string;
+    extracted_facts?: string[];
+    raw_extraction?: string;
+    messages_buffered?: number;
+    buffer_fill_percentage?: number;
+    auto_flush_scheduled?: boolean;
+    buffered_messages?: { role: string; content_preview: string }[];
+    // Triple extraction fields
+    triples_enabled?: boolean;
+    extraction_mode?: string;
+    facts_processed?: number;
+    estimated_triples?: number | null;
+    pending_extraction?: number;
+    description?: string;
+    error?: string | null;
+  };
+}
+
 class ApiClient {
   private async request<T>(path: string, options?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -87,7 +127,13 @@ class ApiClient {
       response: string;
       memories_retrieved: { id: string; content: string; category_path: string; confidence: number }[];
       memories_stored: { id: string; content: string; category_path: string }[];
-      processing_info: { mode: string; model: string; memories_found: number; facts_extracted: number };
+      processing_info: {
+        mode: string;
+        model: string;
+        memories_found: number;
+        facts_extracted: number;
+        process_steps?: ProcessStep[];
+      };
     }>('/chat/conversation', {
       method: 'POST',
       body: JSON.stringify({
@@ -200,7 +246,7 @@ class ApiClient {
     supersede_model?: string;
     use_llm_importance?: boolean;
     use_memory_supersede?: boolean;
-    use_semantic_triples?: boolean;
+    // use_semantic_triples is always enabled server-side
     triple_extraction_immediate?: boolean;
     triple_extraction_interval_minutes?: number;
   }) {
@@ -215,9 +261,7 @@ class ApiClient {
     if (options.use_memory_supersede !== undefined) {
       params.append('use_memory_supersede', options.use_memory_supersede.toString());
     }
-    if (options.use_semantic_triples !== undefined) {
-      params.append('use_semantic_triples', options.use_semantic_triples.toString());
-    }
+    // use_semantic_triples is always on - removed from API
     if (options.triple_extraction_immediate !== undefined) {
       params.append('triple_extraction_immediate', options.triple_extraction_immediate.toString());
     }

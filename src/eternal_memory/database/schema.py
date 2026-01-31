@@ -168,6 +168,11 @@ class DatabaseSchema:
                 # MemGPT-style supersede columns
                 await conn.execute("ALTER TABLE memory_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
                 await conn.execute("ALTER TABLE memory_items ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES memory_items(id)")
+                
+                # CRITICAL: Update existing NULL is_active values to TRUE
+                # This ensures all legacy items are properly included in searches
+                await conn.execute("UPDATE memory_items SET is_active = TRUE WHERE is_active IS NULL")
+                await conn.execute("UPDATE semantic_triples SET is_active = TRUE WHERE is_active IS NULL")
             except Exception:
                 # Fallback for older Postgres versions or if column exists and IF NOT EXISTS is not supported
                 pass

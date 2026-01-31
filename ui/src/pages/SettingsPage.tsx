@@ -216,7 +216,6 @@ export default function SettingsPage() {
   const [supersedeModel, setSupersedeModel] = useState('gpt-4o-mini')
   const [useLLMImportance, setUseLLMImportance] = useState(false)
   const [useMemorySupersede, setUseMemorySupersede] = useState(false)
-  const [useSemanticTriples, setUseSemanticTriples] = useState(false)
   const [tripleExtractionImmediate, setTripleExtractionImmediate] = useState(true)
   const [tripleExtractionInterval, setTripleExtractionInterval] = useState(5)
 
@@ -271,7 +270,7 @@ export default function SettingsPage() {
       setSupersedeModel(data.supersede_model)
       setUseLLMImportance(data.use_llm_importance)
       setUseMemorySupersede(data.use_memory_supersede)
-      setUseSemanticTriples(data.use_semantic_triples)
+      // use_semantic_triples is always true - no state needed
       setTripleExtractionImmediate(data.triple_extraction_immediate)
       setTripleExtractionInterval(data.triple_extraction_interval_minutes)
       setModel(data.effective_chat_model)
@@ -427,15 +426,6 @@ export default function SettingsPage() {
       await api.setModel({ use_memory_supersede: enabled })
     } catch (error) {
       console.error('Failed to save memory supersede setting:', error)
-    }
-  }
-
-  const handleSemanticTriplesToggle = async (enabled: boolean) => {
-    setUseSemanticTriples(enabled)
-    try {
-      await api.setModel({ use_semantic_triples: enabled })
-    } catch (error) {
-      console.error('Failed to save semantic triples setting:', error)
     }
   }
 
@@ -844,43 +834,34 @@ export default function SettingsPage() {
                   </button>
                 </div>
 
-                {/* Semantic Triples Toggle */}
-                <div className="flex items-center justify-between pt-3 border-t border-white/10">
-                  <div>
-                    <span className="text-gray-400">Entity-Level Triples</span>
-                    <p className="text-xs text-gray-600">SPO 분해로 정밀 기억 수정 (LangMem 방식)</p>
+                {/* Entity-Level Triples - Always Enabled */}
+                <div className="pt-3 border-t border-white/10 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-gray-400">Entity-Level Triples</span>
+                      <p className="text-xs text-gray-600">SPO 분해로 정밀 기억 수정 (LangMem 방식)</p>
+                    </div>
+                    <span className="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium">
+                      Always On
+                    </span>
                   </div>
-                  <button
-                    onClick={() => handleSemanticTriplesToggle(!useSemanticTriples)}
-                    className={`relative w-12 h-6 rounded-full transition-colors ${
-                      useSemanticTriples ? 'bg-purple-500' : 'bg-white/10'
-                    }`}
-                  >
-                    <span
-                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                        useSemanticTriples ? 'translate-x-6' : ''
-                      }`}
-                    />
-                  </button>
-                </div>
 
-                {/* Lazy Evaluation Settings (shown when Semantic Triples enabled) */}
-                {useSemanticTriples && (
-                  <div className="pt-3 pl-4 border-l-2 border-purple-500/30 space-y-3">
+                  {/* Extraction Mode Selection */}
+                  <div className="pl-4 border-l-2 border-emerald-500/30 space-y-3">
                     {/* Immediate vs Lazy Toggle */}
                     <div className="flex items-center justify-between">
                       <div>
-                        <span className="text-gray-400 text-sm">즉시 추출</span>
+                        <span className="text-gray-400 text-sm">추출 모드</span>
                         <p className="text-xs text-gray-600">
                           {tripleExtractionImmediate 
-                            ? '메모 저장 시 바로 Triple 생성'
-                            : '배치로 지연 처리'}
+                            ? '즉시 추출: 메모 저장 시 바로 Triple 생성'
+                            : '지연 추출: 배치로 모아서 처리'}
                         </p>
                       </div>
                       <button
                         onClick={() => handleTripleExtractionImmediateToggle(!tripleExtractionImmediate)}
                         className={`relative w-12 h-6 rounded-full transition-colors ${
-                          tripleExtractionImmediate ? 'bg-emerald-500' : 'bg-white/10'
+                          tripleExtractionImmediate ? 'bg-emerald-500' : 'bg-amber-500'
                         }`}
                       >
                         <span
@@ -911,7 +892,7 @@ export default function SettingsPage() {
                       </div>
                     )}
                   </div>
-                )}
+                </div>
               </div>
 
               <p className="text-xs text-gray-500">

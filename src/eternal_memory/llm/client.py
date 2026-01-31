@@ -677,18 +677,43 @@ Respond with ONLY a valid JSON array of triples. No explanation."""
         prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 1000,
+        response_format: Optional[str] = None,
     ) -> str:
         """
         Generate a straight completion for a prompt.
+        
+        Args:
+            prompt: The prompt to complete
+            temperature: Sampling temperature (0.0-2.0)
+            max_tokens: Maximum tokens to generate
+            response_format: Optional, "json_object" for JSON mode
+            
+        Returns:
+            The completion text, or parsed JSON dict if response_format is "json_object"
         """
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        kwargs = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        
+        if response_format == "json_object":
+            kwargs["response_format"] = {"type": "json_object"}
+        
+        response = await self.client.chat.completions.create(**kwargs)
         await self._report_usage(response)
-        return response.choices[0].message.content
+        
+        content = response.choices[0].message.content
+        
+        # If JSON mode, parse and return dict
+        if response_format == "json_object":
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return {"error": "Failed to parse JSON", "raw": content}
+        
+        return content
 
     async def generate_daily_reflection(
         self,

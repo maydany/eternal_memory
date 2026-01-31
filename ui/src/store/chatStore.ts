@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import type { ProcessStep } from '../api/client'
 
 export interface Message {
   id: string
@@ -8,7 +9,13 @@ export interface Message {
   timestamp: string  // ISO string for serialization
   memoriesRetrieved?: { id: string; content: string; category_path: string; confidence: number }[]
   memoriesStored?: { id: string; content: string; category_path: string }[]
-  processingInfo?: { mode: string; model: string; memories_found: number; facts_extracted: number }
+  processingInfo?: { 
+    mode: string
+    model: string
+    memories_found: number
+    facts_extracted: number
+    process_steps?: ProcessStep[]
+  }
 }
 
 export interface ChatSession {

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Zap, Brain, Loader2, Sparkles, MemoryStick, Database, RefreshCw, Trash2 } from 'lucide-react'
+import { Send, Zap, Brain, Loader2, Sparkles, MemoryStick, Database, RefreshCw, Trash2, Activity, CheckCircle2, Clock, SkipForward, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { api } from '../api/client'
+import type { ProcessStep } from '../api/client'
 import { useChatStore } from '../store/chatStore'
 import type { Message } from '../store/chatStore'
 import SessionTabs from '../components/SessionTabs'
@@ -50,7 +51,8 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Sidebar state (global, not per-session)
-  const [activeTab, setActiveTab] = useState<'memory' | 'buffer'>('memory')
+  const [activeTab, setActiveTab] = useState<'memory' | 'buffer' | 'process'>('memory')
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
   const [bufferStatus, setBufferStatus] = useState<BufferStatus | null>(null)
   const [bufferMessages, setBufferMessages] = useState<BufferMessage[]>([])
   const [isFlushLoading, setIsFlushLoading] = useState(false)
@@ -304,43 +306,54 @@ export default function ChatPage() {
       </div>
 
       {/* Context Inspector Sidebar */}
-      <aside className="w-80 border-l border-white/10 bg-[#0a0a0f] flex flex-col">
+      <aside className="w-96 border-l border-white/10 bg-[#0a0a0f] flex flex-col">
         {/* Tab Header */}
-        <header className="h-16 px-4 flex items-center border-b border-white/10">
+        <header className="h-16 px-3 flex items-center border-b border-white/10">
           <div className="flex w-full bg-white/5 rounded-lg p-1">
             <button
               onClick={() => setActiveTab('memory')}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-sm font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition-all ${
                 activeTab === 'memory'
                   ? 'bg-purple-600 text-white'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              <MemoryStick className="w-4 h-4" />
+              <MemoryStick className="w-3.5 h-3.5" />
               Memory
             </button>
             <button
               onClick={() => setActiveTab('buffer')}
-              className={`flex-1 flex items-center justify-center gap-2 py-2 rounded-md text-sm font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition-all ${
                 activeTab === 'buffer'
                   ? 'bg-orange-600 text-white'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              <Database className="w-4 h-4" />
+              <Database className="w-3.5 h-3.5" />
               Buffer
               {bufferStatus && bufferStatus.message_count > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 text-xs bg-orange-500/30 rounded-full">
+                <span className="ml-0.5 px-1.5 py-0.5 text-[10px] bg-orange-500/30 rounded-full">
                   {bufferStatus.message_count}
                 </span>
               )}
+            </button>
+            <button
+              onClick={() => setActiveTab('process')}
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition-all ${
+                activeTab === 'process'
+                  ? 'bg-teal-600 text-white'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              <Activity className="w-3.5 h-3.5" />
+              Process
             </button>
           </div>
         </header>
 
         {/* Tab Content */}
         <div className="flex-1 overflow-y-auto p-4">
-          {activeTab === 'memory' ? (
+          {activeTab === 'memory' && (
             /* Memory Tab Content */
             selectedMessage ? (
               <div className="space-y-4">
@@ -424,7 +437,9 @@ export default function ChatPage() {
                 </p>
               </div>
             )
-          ) : (
+          )}
+
+          {activeTab === 'buffer' && (
             /* Buffer Tab Content */
             <div className="space-y-4">
               {/* Buffer Status Card */}
@@ -527,6 +542,371 @@ export default function ChatPage() {
                 )}
               </div>
             </div>
+          )}
+
+          {activeTab === 'process' && (
+            /* Process Tab Content */
+            selectedMessage?.processingInfo?.process_steps ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs font-medium text-teal-400 flex items-center gap-1.5">
+                    <Activity className="w-3.5 h-3.5" />
+                    처리 과정
+                  </h4>
+                  <span className="text-[10px] text-gray-500">
+                    총 {selectedMessage.processingInfo.process_steps.reduce((acc: number, s: ProcessStep) => acc + (s.duration_ms || 0), 0)}ms
+                  </span>
+                </div>
+
+                {selectedMessage.processingInfo.process_steps.map((step: ProcessStep, idx: number) => {
+                  const stepLabels: Record<string, string> = {
+                    memory_retrieval: '🔍 메모리 검색',
+                    context_building: '🏗️ 컨텍스트 구성',
+                    llm_generation: '🤖 LLM 응답 생성',
+                    fact_extraction: '💡 사실 추출',
+                    triple_extraction: '🔗 트리플 추출',
+                    buffer_update: '📝 버퍼 업데이트',
+                  }
+                  
+                  const isExpanded = expandedSteps.has(step.step)
+                  
+                  const toggleExpand = () => {
+                    setExpandedSteps(prev => {
+                      const next = new Set(prev)
+                      if (next.has(step.step)) {
+                        next.delete(step.step)
+                      } else {
+                        next.add(step.step)
+                      }
+                      return next
+                    })
+                  }
+
+                  const getStatusIcon = (status: string) => {
+                    switch (status) {
+                      case 'completed':
+                        return <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />
+                      case 'skipped':
+                        return <SkipForward className="w-3.5 h-3.5 text-gray-500" />
+                      case 'error':
+                        return <AlertCircle className="w-3.5 h-3.5 text-red-400" />
+                      case 'running':
+                        return <Loader2 className="w-3.5 h-3.5 text-teal-400 animate-spin" />
+                      default:
+                        return <Clock className="w-3.5 h-3.5 text-gray-400" />
+                    }
+                  }
+
+                  const getStatusColor = (status: string) => {
+                    switch (status) {
+                      case 'completed': return 'border-green-500/30 bg-green-500/5'
+                      case 'skipped': return 'border-gray-500/30 bg-gray-500/5'
+                      case 'error': return 'border-red-500/30 bg-red-500/5'
+                      default: return 'border-teal-500/30 bg-teal-500/5'
+                    }
+                  }
+
+                  return (
+                    <div
+                      key={idx}
+                      className={`rounded-lg border ${getStatusColor(step.status)} transition-all`}
+                    >
+                      {/* Step Header */}
+                      <button
+                        onClick={toggleExpand}
+                        className="w-full p-3 flex items-center justify-between text-left"
+                      >
+                        <div className="flex items-center gap-2">
+                          {getStatusIcon(step.status)}
+                          <span className="text-xs font-medium text-white">
+                            {stepLabels[step.step] || step.step}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {step.duration_ms !== undefined && (
+                            <span className="text-[10px] text-gray-400">
+                              {step.duration_ms}ms
+                            </span>
+                          )}
+                          {isExpanded ? (
+                            <ChevronDown className="w-3.5 h-3.5 text-gray-400" />
+                          ) : (
+                            <ChevronRight className="w-3.5 h-3.5 text-gray-400" />
+                          )}
+                        </div>
+                      </button>
+
+                      {/* Step Details (Expandable) */}
+                      {isExpanded && step.details && (
+                        <div className="px-3 pb-3 pt-0">
+                          <div className="border-t border-white/5 pt-2 space-y-1.5 text-[11px]">
+                            {step.step === 'memory_retrieval' && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">검색 모드</span>
+                                  <span className="text-white">{step.details.mode}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">검색된 항목</span>
+                                  <span className="text-cyan-400">{step.details.items_found}개</span>
+                                </div>
+                                {step.details.categories_matched && step.details.categories_matched.length > 0 && (
+                                  <div>
+                                    <span className="text-gray-500">매칭 카테고리:</span>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {step.details.categories_matched.map((cat: string, i: number) => (
+                                        <span key={i} className="px-1.5 py-0.5 bg-white/5 rounded text-gray-300">
+                                          {cat}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {/* Retrieved Items Content */}
+                                {step.details.retrieved_items && step.details.retrieved_items.length > 0 && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-gray-400 text-[10px] uppercase tracking-wide">검색된 메모리 내용</span>
+                                    <div className="mt-1.5 space-y-1.5">
+                                      {step.details.retrieved_items.map((item: {content: string; category_path: string; confidence: number}, i: number) => (
+                                        <div key={i} className="p-2 bg-cyan-500/10 rounded border border-cyan-500/20">
+                                          <p className="text-gray-200 text-[10px] leading-relaxed">{item.content}</p>
+                                          <div className="flex justify-between mt-1 text-[9px] text-gray-500">
+                                            <span>{item.category_path}</span>
+                                            <span>{Math.round(item.confidence * 100)}%</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {step.step === 'context_building' && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">시스템 프롬프트</span>
+                                  <span className="text-white">{step.details.system_prompt_length} chars</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">메모리 컨텍스트</span>
+                                  <span className="text-cyan-400">{step.details.memory_context_length} chars</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">히스토리 메시지</span>
+                                  <span className="text-white">{step.details.history_messages}개</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">총 메시지</span>
+                                  <span className="text-white">{step.details.total_messages}개</span>
+                                </div>
+                                {step.details.pruned_messages !== undefined && step.details.pruned_messages > 0 && (
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">프루닝된 메시지</span>
+                                    <span className="text-orange-400">{step.details.pruned_messages}개</span>
+                                  </div>
+                                )}
+                                {/* System Prompt Preview */}
+                                {step.details.system_prompt_preview && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-gray-400 text-[10px] uppercase tracking-wide">시스템 프롬프트</span>
+                                    <div className="mt-1 p-2 bg-white/5 rounded text-[10px] text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
+                                      {step.details.system_prompt_preview}
+                                    </div>
+                                  </div>
+                                )}
+                                {/* Memory Context Preview */}
+                                {step.details.memory_context_preview && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-cyan-400 text-[10px] uppercase tracking-wide">메모리 컨텍스트</span>
+                                    <div className="mt-1 p-2 bg-cyan-500/10 rounded border border-cyan-500/20 text-[10px] text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
+                                      {step.details.memory_context_preview}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {step.step === 'llm_generation' && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">모델</span>
+                                  <span className="text-purple-400 font-mono">{step.details.model}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">프롬프트 토큰</span>
+                                  <span className="text-white">{step.details.tokens_prompt}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">응답 토큰</span>
+                                  <span className="text-white">{step.details.tokens_completion}</span>
+                                </div>
+                                <div className="flex justify-between font-medium">
+                                  <span className="text-gray-500">총 토큰</span>
+                                  <span className="text-yellow-400">{step.details.tokens_total}</span>
+                                </div>
+                                {/* Response Preview */}
+                                {step.details.response_preview && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-purple-400 text-[10px] uppercase tracking-wide">LLM 응답 미리보기</span>
+                                    <div className="mt-1 p-2 bg-purple-500/10 rounded border border-purple-500/20 text-[10px] text-gray-300 leading-relaxed">
+                                      {step.details.response_preview}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {step.step === 'fact_extraction' && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">추출 모델</span>
+                                  <span className="text-purple-400 font-mono">{step.details.extraction_model}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">추출된 사실</span>
+                                  <span className={step.details.facts_found ? 'text-green-400' : 'text-gray-500'}>
+                                    {step.details.facts_found}개
+                                  </span>
+                                </div>
+                                {/* Extracted Facts Content */}
+                                {step.details.extracted_facts && step.details.extracted_facts.length > 0 && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-green-400 text-[10px] uppercase tracking-wide">추출된 사실 내용</span>
+                                    <div className="mt-1.5 space-y-1">
+                                      {step.details.extracted_facts.map((fact: string, i: number) => (
+                                        <div key={i} className="p-2 bg-green-500/10 rounded border border-green-500/20">
+                                          <p className="text-gray-200 text-[10px] leading-relaxed">💡 {fact}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                                {/* Raw Extraction Preview (if no facts found) */}
+                                {step.details.raw_extraction && step.details.facts_found === 0 && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-gray-400 text-[10px] uppercase tracking-wide">LLM 추출 응답</span>
+                                    <div className="mt-1 p-2 bg-white/5 rounded text-[10px] text-gray-400 italic">
+                                      {step.details.raw_extraction}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {step.step === 'triple_extraction' && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">트리플 활성화</span>
+                                  <span className={step.details.triples_enabled ? 'text-green-400' : 'text-gray-500'}>
+                                    {step.details.triples_enabled ? 'ON' : 'OFF'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">추출 모드</span>
+                                  <span className={`${
+                                    step.details.extraction_mode === 'immediate' 
+                                      ? 'text-cyan-400' 
+                                      : 'text-orange-400'
+                                  }`}>
+                                    {step.details.extraction_mode === 'immediate' ? '즉시 추출' : '지연 추출'}
+                                  </span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">처리된 사실</span>
+                                  <span className="text-white">{step.details.facts_processed}개</span>
+                                </div>
+                                {step.details.estimated_triples !== null && step.details.estimated_triples !== undefined && (
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">추출된 트리플 (추정)</span>
+                                    <span className="text-cyan-400">~{step.details.estimated_triples}개</span>
+                                  </div>
+                                )}
+                                {step.details.pending_extraction !== undefined && step.details.pending_extraction > 0 && (
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">대기 중인 추출</span>
+                                    <span className="text-orange-400">{step.details.pending_extraction}개</span>
+                                  </div>
+                                )}
+                                {/* Description */}
+                                {step.details.description && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <div className="p-2 bg-indigo-500/10 rounded border border-indigo-500/20">
+                                      <p className="text-gray-300 text-[10px] leading-relaxed">
+                                        🔗 {step.details.description}
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {step.step === 'buffer_update' && (
+                              <>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">버퍼에 추가</span>
+                                  <span className="text-white">{step.details.messages_buffered}개 메시지</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-500">버퍼 사용량</span>
+                                  <span className={`${
+                                    (step.details.buffer_fill_percentage ?? 0) >= 80 
+                                      ? 'text-red-400' 
+                                      : 'text-white'
+                                  }`}>
+                                    {step.details.buffer_fill_percentage}%
+                                  </span>
+                                </div>
+                                {/* Buffered Messages Content */}
+                                {step.details.buffered_messages && step.details.buffered_messages.length > 0 && (
+                                  <div className="mt-2 pt-2 border-t border-white/5">
+                                    <span className="text-orange-400 text-[10px] uppercase tracking-wide">버퍼에 추가된 메시지</span>
+                                    <div className="mt-1.5 space-y-1.5">
+                                      {step.details.buffered_messages.map((msg: {role: string; content_preview: string}, i: number) => (
+                                        <div key={i} className={`p-2 rounded border ${
+                                          msg.role === 'user' 
+                                            ? 'bg-blue-500/10 border-blue-500/20' 
+                                            : 'bg-purple-500/10 border-purple-500/20'
+                                        }`}>
+                                          <div className="flex items-center gap-1.5 mb-1">
+                                            <span className={`px-1 py-0.5 rounded text-[9px] font-medium ${
+                                              msg.role === 'user' 
+                                                ? 'bg-blue-500/30 text-blue-300' 
+                                                : 'bg-purple-500/30 text-purple-300'
+                                            }`}>
+                                              {msg.role === 'user' ? 'USER' : 'AI'}
+                                            </span>
+                                          </div>
+                                          <p className="text-gray-200 text-[10px] leading-relaxed">{msg.content_preview}</p>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {step.details.error && (
+                              <div className="p-2 bg-red-500/10 rounded text-red-400">
+                                ⚠️ {step.details.error}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-gray-500 text-sm">
+                <Activity className="w-12 h-12 mb-4 opacity-30" />
+                <p className="text-center">
+                  AI 응답을 클릭하면<br />
+                  처리 과정을 확인할 수 있습니다
+                </p>
+              </div>
+            )
           )}
         </div>
       </aside>

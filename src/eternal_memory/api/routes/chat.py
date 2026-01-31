@@ -5,6 +5,7 @@ Endpoints for memory-augmented conversation.
 """
 
 import os
+import time
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -173,10 +174,18 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
     try:
         system = await get_memory_system()
         
+        # Initialize process tracking
+        process_steps = []
+        
         # Step 1: Retrieve relevant memories
         memories_retrieved = []
         memories_stored = []
         memory_context = ""
+        retrieval_categories = []
+        
+        step1_start = time.time()
+        retrieval_status = "completed"
+        retrieval_error = None
         
         try:
             result = await system.retrieve(request.message, request.mode)
@@ -191,11 +200,28 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
                     for item in result.items
                 ]
                 memory_context = "\n".join([f"- {item.content}" for item in result.items])
-        except Exception:
-            # Continue even if retrieval fails
-            pass
+                retrieval_categories = result.related_categories[:5] if result.related_categories else []
+        except Exception as e:
+            retrieval_status = "error"
+            retrieval_error = str(e)
         
-        # Step 2: Generate LLM response with memory context
+        step1_duration = int((time.time() - step1_start) * 1000)
+        process_steps.append({
+            "step": "memory_retrieval",
+            "status": retrieval_status,
+            "duration_ms": step1_duration,
+            "details": {
+                "mode": request.mode,
+                "items_found": len(memories_retrieved),
+                "categories_matched": retrieval_categories,
+                "error": retrieval_error,
+                "retrieved_items": memories_retrieved[:5],  # Show up to 5 items
+            }
+        })
+        
+        # Step 2: Context Building (System Prompt + Memory Context)
+        step2_start = time.time()
+        
         api_key = os.getenv("OPENAI_API_KEY")
         model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
         
@@ -221,24 +247,39 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
             })
         
         # Add conversation history if provided
+        history_count = 0
         if request.conversation_history:
+            history_count = min(len(request.conversation_history), 10)
             messages.extend(request.conversation_history[-10:])  # Last 10 messages
         
         # Add current user message
         messages.append({"role": "user", "content": request.message})
         
         # --- Context Pruning ---
-        # Ensure we don't exceed model limits. 
-        # OpenAI models have varying limits, but we'll set a safe "working context" limit
-        # to ensure we leave room for the response.
-        # e.g., for 128k model, we might want to limit history to 32k or 64k to save cost/latency.
-        # But for 'gpt-4o-mini', it has 128k context.
-        # We'll set a conservative 32k token limit for input history to correspond with ContextPruner default.
         pruner = ContextPruner(max_tokens=30000)
+        messages_before_prune = len(messages)
         messages = pruner.prune_messages(messages)
-        # -----------------------
+        messages_after_prune = len(messages)
+        
+        step2_duration = int((time.time() - step2_start) * 1000)
+        process_steps.append({
+            "step": "context_building",
+            "status": "completed",
+            "duration_ms": step2_duration,
+            "details": {
+                "system_prompt_length": len(system_prompt),
+                "system_prompt_preview": system_prompt[:300] + ("..." if len(system_prompt) > 300 else ""),
+                "memory_context_length": len(memory_context),
+                "memory_context_preview": memory_context[:500] + ("..." if len(memory_context) > 500 else "") if memory_context else None,
+                "history_messages": history_count,
+                "total_messages": len(messages),
+                "pruned_messages": messages_before_prune - messages_after_prune,
+            }
+        })
 
-        # Generate response
+        # Step 3: LLM Generation
+        step3_start = time.time()
+        
         completion = await client.chat.completions.create(
             model=model,
             messages=messages,
@@ -248,17 +289,25 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
         
         ai_response = completion.choices[0].message.content
         
-        # Step 3: Buffer messages and check for flush
-        # We buffer both the user message and the AI response
-        await system.add_to_buffer("user", request.message)
-        await system.add_to_buffer("assistant", ai_response)
+        step3_duration = int((time.time() - step3_start) * 1000)
+        process_steps.append({
+            "step": "llm_generation",
+            "status": "completed",
+            "duration_ms": step3_duration,
+            "details": {
+                "model": model,
+                "tokens_prompt": completion.usage.prompt_tokens if completion.usage else 0,
+                "tokens_completion": completion.usage.completion_tokens if completion.usage else 0,
+                "tokens_total": completion.usage.total_tokens if completion.usage else 0,
+                "response_preview": ai_response[:200] + ("..." if len(ai_response) > 200 else "") if ai_response else None,
+            }
+        })
         
-        # Check and flush if threshold reached (Background Task)
-        # We run this in the background to avoid blocking the user response
-        background_tasks.add_task(system.check_and_flush)
+        # Step 4: Fact Extraction
+        step4_start = time.time()
+        extraction_status = "completed"
+        facts_found = 0
         
-        # Optional: Keep "per-message" extraction but make it very strict
-        # or rely solely on flush. For now, we'll keep it as a "fast path" for critical info.
         extraction_prompt = f"""Analyze this conversation and extract CRITICAL facts about the user.
 Only extract facts that are EXTREMELY important to remember immediately (like a name change, urgent preference).
 If it can wait for a batch summary, respond with "NONE".
@@ -295,9 +344,97 @@ NONE"""
                                 "content": item.content,
                                 "category_path": item.category_path,
                             })
+                            facts_found += 1
                         except Exception as e:
                             # Log but don't crash
                             print(f"ERROR: Memorize failed: {e}")
+        else:
+            extraction_status = "skipped"
+        
+        step4_duration = int((time.time() - step4_start) * 1000)
+        # Collect extracted fact contents for display
+        extracted_facts_content = [m["content"] for m in memories_stored] if memories_stored else []
+        process_steps.append({
+            "step": "fact_extraction",
+            "status": extraction_status,
+            "duration_ms": step4_duration,
+            "details": {
+                "facts_found": facts_found,
+                "extraction_model": model,
+                "extracted_facts": extracted_facts_content,
+                "raw_extraction": extracted[:300] + ("..." if len(extracted) > 300 else "") if extracted else None,
+            }
+        })
+        
+        # Step 4.5: Triple Extraction Information
+        # Get triple extraction config from system
+        llm_config = system._memorize_pipeline.llm_config if hasattr(system, '_memorize_pipeline') else None
+        triple_enabled = llm_config.use_semantic_triples if llm_config else False
+        triple_immediate = llm_config.triple_extraction_immediate if llm_config else False
+        
+        triple_status = "completed" if facts_found > 0 and triple_enabled else "skipped"
+        triple_mode = "immediate" if triple_immediate else "lazy"
+        
+        # Count triples that would be extracted (estimate: ~1-3 triples per fact)
+        estimated_triples = facts_found * 2 if triple_immediate else 0
+        
+        process_steps.append({
+            "step": "triple_extraction",
+            "status": triple_status,
+            "duration_ms": 0,  # Included in fact_extraction timing
+            "details": {
+                "triples_enabled": triple_enabled,
+                "extraction_mode": triple_mode,
+                "facts_processed": facts_found,
+                "estimated_triples": estimated_triples if triple_immediate else None,
+                "pending_extraction": facts_found if not triple_immediate and facts_found > 0 else 0,
+                "description": (
+                    f"즉시 추출: {facts_found}개 사실에서 트리플 추출" 
+                    if triple_immediate and facts_found > 0 
+                    else f"지연 추출: {facts_found}개 사실 대기 중" 
+                    if not triple_immediate and facts_found > 0 
+                    else "추출할 사실 없음"
+                ),
+            }
+        })
+        
+        # Step 5: Buffer Update
+        step5_start = time.time()
+        
+        await system.add_to_buffer("user", request.message)
+        await system.add_to_buffer("assistant", ai_response)
+        
+        # Calculate buffer status directly (same logic as buffer.py route)
+        buffer = system.conversation_buffer
+        threshold = system.FLUSH_THRESHOLD_TOKENS
+        total_chars = sum(len(m.get("content", "")) for m in buffer)
+        estimated_tokens = int(total_chars / 2)
+        fill_percentage = min(100, int((estimated_tokens / threshold) * 100)) if threshold > 0 else 0
+        
+        # Check and flush if threshold reached (Background Task)
+        background_tasks.add_task(system.check_and_flush)
+        
+        step5_duration = int((time.time() - step5_start) * 1000)
+        process_steps.append({
+            "step": "buffer_update",
+            "status": "completed",
+            "duration_ms": step5_duration,
+            "details": {
+                "messages_buffered": 2,
+                "buffer_fill_percentage": fill_percentage,
+                "auto_flush_scheduled": True,
+                "buffered_messages": [
+                    {
+                        "role": "user",
+                        "content_preview": request.message[:150] + ("..." if len(request.message) > 150 else ""),
+                    },
+                    {
+                        "role": "assistant",
+                        "content_preview": ai_response[:150] + ("..." if len(ai_response) > 150 else "") if ai_response else "",
+                    },
+                ],
+            }
+        })
         
         return ConversationResponse(
             response=ai_response,
@@ -308,8 +445,10 @@ NONE"""
                 "model": model,
                 "memories_found": len(memories_retrieved),
                 "facts_extracted": len(memories_stored),
+                "process_steps": process_steps,
             }
         )
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+

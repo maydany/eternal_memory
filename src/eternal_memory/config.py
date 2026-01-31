@@ -97,8 +97,8 @@ class LLMConfig(BaseModel):
     
     # Feature toggles
     use_llm_importance: bool = False  # Whether to use LLM for importance rating
-    use_memory_supersede: bool = False  # Whether to detect and supersede contradicting memories
-    use_semantic_triples: bool = False  # Whether to extract entity-level triples for precise updates
+    use_memory_supersede: bool = True  # Whether to detect and supersede contradicting memories
+    use_semantic_triples: bool = True  # Always enabled - core feature for entity-level precision
     
     # Lazy Evaluation for triple extraction
     triple_extraction_immediate: bool = True  # True = extract on memorize, False = batch process later

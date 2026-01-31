@@ -285,7 +285,6 @@ async def set_model(
     supersede_model: Optional[str] = None,
     use_llm_importance: Optional[bool] = None,
     use_memory_supersede: Optional[bool] = None,
-    use_semantic_triples: Optional[bool] = None,
     triple_extraction_immediate: Optional[bool] = None,
     triple_extraction_interval_minutes: Optional[int] = None,
 ):
@@ -299,7 +298,6 @@ async def set_model(
         supersede_model: Model for contradiction detection (MemGPT-style)
         use_llm_importance: Whether to use LLM for importance rating
         use_memory_supersede: Whether to detect and supersede contradicting memories
-        use_semantic_triples: Whether to extract entity-level triples for precise updates
         triple_extraction_immediate: True = extract triples immediately, False = lazy batch
         triple_extraction_interval_minutes: Interval for batch extraction (1, 5, 10, 30)
     """
@@ -334,8 +332,8 @@ async def set_model(
     if use_memory_supersede is not None:
         config["llm"]["use_memory_supersede"] = use_memory_supersede
     
-    if use_semantic_triples is not None:
-        config["llm"]["use_semantic_triples"] = use_semantic_triples
+    # use_semantic_triples is always True - not configurable
+    config["llm"]["use_semantic_triples"] = True
     
     if triple_extraction_immediate is not None:
         config["llm"]["triple_extraction_immediate"] = triple_extraction_immediate
@@ -372,8 +370,8 @@ async def get_model_config():
         "memory_model": "gpt-4o-mini",
         "supersede_model": "gpt-4o-mini",
         "use_llm_importance": False,
-        "use_memory_supersede": False,
-        "use_semantic_triples": False,
+        "use_memory_supersede": True,
+        "use_semantic_triples": True,  # Always enabled - core feature
         "triple_extraction_immediate": True,
         "triple_extraction_interval_minutes": 5,
     }
@@ -390,7 +388,8 @@ async def get_model_config():
                 settings["supersede_model"] = config["llm"].get("supersede_model", "gpt-4o-mini")
                 settings["use_llm_importance"] = config["llm"].get("use_llm_importance", False)
                 settings["use_memory_supersede"] = config["llm"].get("use_memory_supersede", False)
-                settings["use_semantic_triples"] = config["llm"].get("use_semantic_triples", False)
+                # use_semantic_triples is always True - not configurable
+                settings["use_semantic_triples"] = True
                 settings["triple_extraction_immediate"] = config["llm"].get("triple_extraction_immediate", True)
                 settings["triple_extraction_interval_minutes"] = config["llm"].get("triple_extraction_interval_minutes", 5)
         except Exception:
