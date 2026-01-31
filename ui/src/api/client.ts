@@ -302,6 +302,34 @@ class ApiClient {
       text_length: m.text_length ?? 0,
     }));
   }
+
+  // Buffer endpoints
+  async getBufferStatus() {
+    return this.request<{
+      message_count: number;
+      estimated_tokens: number;
+      threshold_tokens: number;
+      fill_percentage: number;
+      auto_flush_enabled: boolean;
+    }>('/buffer/status');
+  }
+
+  async getBufferMessages(limit?: number) {
+    const params = limit ? `?limit=${limit}` : '';
+    return this.request<{
+      messages: { role: string; content: string; timestamp: string }[];
+      total: number;
+    }>(`/buffer/messages${params}`);
+  }
+
+  async flushBuffer() {
+    return this.request<{
+      success: boolean;
+      message: string;
+      items_created: number;
+      items?: { id: string; content: string; category_path: string }[];
+    }>('/buffer/flush', { method: 'POST' });
+  }
 }
 
 export interface ScheduledTask {

@@ -106,11 +106,15 @@ class DatabaseSchema:
                              Defaults to local 'eternal_memory' database.
         """
         self.connection_string = connection_string or "postgresql://localhost/eternal_memory"
+        self._initialized = False
     
     async def initialize(self) -> None:
         """
         Create all tables and indexes if they don't exist.
         """
+        if self._initialized:
+            return
+        
         conn = await asyncpg.connect(self.connection_string)
         try:
             await conn.execute(SCHEMA_SQL)
@@ -123,6 +127,8 @@ class DatabaseSchema:
                 pass
         finally:
             await conn.close()
+        
+        self._initialized = True
     
     async def drop_all(self) -> None:
         """

@@ -32,6 +32,8 @@ class MemoryRepository:
     
     async def connect(self) -> None:
         """Initialize connection pool."""
+        if self._pool is not None:
+            return
         self._pool = await asyncpg.create_pool(self.connection_string, min_size=2, max_size=10)
     
     async def disconnect(self) -> None:

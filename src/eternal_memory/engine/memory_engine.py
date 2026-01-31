@@ -118,6 +118,9 @@ class EternalMemorySystem(EternalMemoryEngine):
         if self._initialized:
             return
         
+        # Set flag immediately to prevent recursive initialization
+        self._initialized = True
+        
         # Initialize database schema
         await self.schema.initialize()
         
@@ -271,8 +274,8 @@ class EternalMemorySystem(EternalMemoryEngine):
     
     async def close(self) -> None:
         """Close all connections and cleanup with graceful buffer flush."""
-        # Flush remaining buffer before shutdown
-        if self.conversation_buffer:
+        # Flush remaining buffer before shutdown (only if fully initialized)
+        if self.conversation_buffer and self._memorize_pipeline:
             print("⚠️  Flushing remaining buffer before shutdown...")
             await self.flush_buffer()
         
@@ -305,9 +308,7 @@ class EternalMemorySystem(EternalMemoryEngine):
         if restored:
             self.conversation_buffer = restored
             print(f"✅ Restored {len(restored)} messages from previous session")
-            
-            # Auto-flush restored buffer immediately
-            await self.flush_buffer()
+            # Note: Buffer will be flushed naturally via check_and_flush or on server shutdown
     
     async def _load_custom_jobs_from_db(self) -> None:
         """Load custom jobs from database and register them with the scheduler."""

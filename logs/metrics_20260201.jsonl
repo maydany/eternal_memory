@@ -1,2 +1,3 @@
 {"timestamp": "2026-02-01T00:03:30.169641", "type": "pipeline_execution", "total_duration": 3.733, "stages": {"extract": 3.731, "store": 0.036}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 614}
 {"timestamp": "2026-02-01T00:10:13.030088", "type": "pipeline_execution", "total_duration": 2.672, "stages": {"extract": 2.667, "store": 1.064}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 22}
+{"timestamp": "2026-02-01T01:01:58.443201", "type": "pipeline_execution", "total_duration": 3.943, "stages": {"extract": 3.938, "store": 0.949}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 675}
