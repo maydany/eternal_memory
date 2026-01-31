@@ -110,6 +110,8 @@ CREATE INDEX IF NOT EXISTS idx_category_parent
     ON categories(parent_id);
 CREATE INDEX IF NOT EXISTS idx_category_path 
     ON categories(path);
+CREATE INDEX IF NOT EXISTS idx_category_path_pattern
+    ON categories (path text_pattern_ops);
 CREATE INDEX IF NOT EXISTS idx_memory_category 
     ON memory_items(category_id);
 CREATE INDEX IF NOT EXISTS idx_memory_importance 
