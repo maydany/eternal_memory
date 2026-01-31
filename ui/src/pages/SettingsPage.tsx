@@ -29,6 +29,166 @@ interface BufferSettings {
   auto_flush_enabled: boolean
 }
 
+interface ScoringSettings {
+  alpha_relevance: number
+  alpha_recency: number
+  alpha_importance: number
+  recency_decay_factor: number
+  min_relevance_threshold: number
+}
+
+// Scoring Section Component
+function ScoringSection() {
+  const [settings, setSettings] = useState<ScoringSettings>({
+    alpha_relevance: 1.0,
+    alpha_recency: 1.0,
+    alpha_importance: 1.0,
+    recency_decay_factor: 0.995,
+    min_relevance_threshold: 0.3,
+  })
+  const [isSaving, setIsSaving] = useState(false)
+
+  useEffect(() => {
+    loadScoringSettings()
+  }, [])
+
+  const loadScoringSettings = async () => {
+    try {
+      const data = await api.getScoringSettings()
+      setSettings(data)
+    } catch (error) {
+      console.error('Failed to load scoring settings:', error)
+    }
+  }
+
+  const handleUpdate = async (key: keyof ScoringSettings, value: number) => {
+    setSettings(prev => ({ ...prev, [key]: value }))
+  }
+
+  const handleSave = async (key: keyof ScoringSettings, value: number) => {
+    setIsSaving(true)
+    try {
+      await api.updateScoringSettings({ [key]: value })
+    } catch (error) {
+      console.error('Failed to update scoring settings:', error)
+    }
+    setTimeout(() => setIsSaving(false), 1500)
+  }
+
+  return (
+    <section className="space-y-4">
+      <h3 className="text-lg font-medium text-white flex items-center gap-2">
+        <Server className="w-5 h-5 text-cyan-400" />
+        Memory Scoring
+        <span className="ml-2 px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded text-xs">
+          Generative Agents
+        </span>
+      </h3>
+      <p className="text-sm text-gray-500">
+        메모리 검색 시 Relevance, Recency, Importance의 가중치를 조절합니다.
+      </p>
+      
+      <div className="space-y-6 p-4 rounded-xl bg-white/5 border border-white/10">
+        {/* Alpha Relevance */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-400 flex items-center gap-2">
+              <span className="w-2 h-2 bg-blue-400 rounded-full" />
+              Relevance (관련성)
+            </span>
+            <span className="text-lg font-bold text-blue-400">{settings.alpha_relevance.toFixed(1)}</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="3"
+            step="0.1"
+            value={settings.alpha_relevance}
+            onChange={(e) => handleUpdate('alpha_relevance', parseFloat(e.target.value))}
+            onMouseUp={(e) => handleSave('alpha_relevance', parseFloat((e.target as HTMLInputElement).value))}
+            onTouchEnd={(e) => handleSave('alpha_relevance', parseFloat((e.target as HTMLInputElement).value))}
+            className="w-full h-2 bg-blue-500/20 rounded-lg appearance-none cursor-pointer accent-blue-400"
+          />
+          <p className="text-xs text-gray-600">질문과 기억의 의미적 유사도 가중치</p>
+        </div>
+
+        {/* Alpha Recency */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-400 flex items-center gap-2">
+              <span className="w-2 h-2 bg-green-400 rounded-full" />
+              Recency (최신성)
+            </span>
+            <span className="text-lg font-bold text-green-400">{settings.alpha_recency.toFixed(1)}</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="3"
+            step="0.1"
+            value={settings.alpha_recency}
+            onChange={(e) => handleUpdate('alpha_recency', parseFloat(e.target.value))}
+            onMouseUp={(e) => handleSave('alpha_recency', parseFloat((e.target as HTMLInputElement).value))}
+            onTouchEnd={(e) => handleSave('alpha_recency', parseFloat((e.target as HTMLInputElement).value))}
+            className="w-full h-2 bg-green-500/20 rounded-lg appearance-none cursor-pointer accent-green-400"
+          />
+          <p className="text-xs text-gray-600">최근 접근한 기억일수록 높은 점수</p>
+        </div>
+
+        {/* Alpha Importance */}
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-400 flex items-center gap-2">
+              <span className="w-2 h-2 bg-purple-400 rounded-full" />
+              Importance (중요도)
+            </span>
+            <span className="text-lg font-bold text-purple-400">{settings.alpha_importance.toFixed(1)}</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="3"
+            step="0.1"
+            value={settings.alpha_importance}
+            onChange={(e) => handleUpdate('alpha_importance', parseFloat(e.target.value))}
+            onMouseUp={(e) => handleSave('alpha_importance', parseFloat((e.target as HTMLInputElement).value))}
+            onTouchEnd={(e) => handleSave('alpha_importance', parseFloat((e.target as HTMLInputElement).value))}
+            className="w-full h-2 bg-purple-500/20 rounded-lg appearance-none cursor-pointer accent-purple-400"
+          />
+          <p className="text-xs text-gray-600">LLM이 평가한 기억의 중요도 가중치</p>
+        </div>
+
+        {/* Decay Factor */}
+        <div className="space-y-2 pt-4 border-t border-white/10">
+          <div className="flex items-center justify-between">
+            <span className="text-gray-400">Decay Factor</span>
+            <span className="text-lg font-bold text-yellow-400">{settings.recency_decay_factor.toFixed(3)}</span>
+          </div>
+          <input
+            type="range"
+            min="0.9"
+            max="0.999"
+            step="0.001"
+            value={settings.recency_decay_factor}
+            onChange={(e) => handleUpdate('recency_decay_factor', parseFloat(e.target.value))}
+            onMouseUp={(e) => handleSave('recency_decay_factor', parseFloat((e.target as HTMLInputElement).value))}
+            onTouchEnd={(e) => handleSave('recency_decay_factor', parseFloat((e.target as HTMLInputElement).value))}
+            className="w-full h-2 bg-yellow-500/20 rounded-lg appearance-none cursor-pointer accent-yellow-400"
+          />
+          <p className="text-xs text-gray-600">시간당 Recency 감쇠율 (0.995 = 기본값)</p>
+        </div>
+
+        {isSaving && (
+          <div className="flex items-center gap-2 text-sm text-green-400 animate-pulse">
+            <CheckCircle className="w-4 h-4" />
+            저장됨
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export default function SettingsPage() {
   const [provider, setProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
@@ -50,6 +210,13 @@ export default function SettingsPage() {
   const [dbStats, setDbStats] = useState<DbStats | null>(null)
   const [isLoadingDbStats, setIsLoadingDbStats] = useState(false)
 
+  // Model config (dual models + supersede)
+  const [chatModel, setChatModel] = useState('gpt-4o-mini')
+  const [memoryModel, setMemoryModel] = useState('gpt-4o-mini')
+  const [supersedeModel, setSupersedeModel] = useState('gpt-4o-mini')
+  const [useLLMImportance, setUseLLMImportance] = useState(false)
+  const [useMemorySupersede, setUseMemorySupersede] = useState(false)
+
   // Buffer settings
   const [bufferSettings, setBufferSettings] = useState<BufferSettings>({ flush_threshold_tokens: 4000, auto_flush_enabled: true })
   const [isSavingBuffer, setIsSavingBuffer] = useState(false)
@@ -58,6 +225,7 @@ export default function SettingsPage() {
     loadSettings()
     loadDbStats()
     loadBufferSettings()
+    loadModelConfig()
   }, [])
 
   // Load models when API key is set
@@ -89,6 +257,20 @@ export default function SettingsPage() {
       setSystemPrompt(data.system_prompt || '')
     } catch (error) {
       console.error('Failed to load settings:', error)
+    }
+  }
+
+  const loadModelConfig = async () => {
+    try {
+      const data = await api.getModelConfig()
+      setChatModel(data.effective_chat_model)
+      setMemoryModel(data.memory_model)
+      setSupersedeModel(data.supersede_model)
+      setUseLLMImportance(data.use_llm_importance)
+      setUseMemorySupersede(data.use_memory_supersede)
+      setModel(data.effective_chat_model)
+    } catch (error) {
+      console.error('Failed to load model config:', error)
     }
   }
 
@@ -198,13 +380,47 @@ export default function SettingsPage() {
     }
   }
 
-  const handleModelChange = async (newModel: string) => {
-    setModel(newModel)
-    
+  const handleModelChange = async (type: 'chat' | 'memory' | 'supersede', newModel: string) => {
+    if (type === 'chat') {
+      setChatModel(newModel)
+      setModel(newModel)
+      try {
+        await api.setModel({ chat_model: newModel })
+      } catch (error) {
+        console.error('Failed to save chat model:', error)
+      }
+    } else if (type === 'memory') {
+      setMemoryModel(newModel)
+      try {
+        await api.setModel({ memory_model: newModel })
+      } catch (error) {
+        console.error('Failed to save memory model:', error)
+      }
+    } else if (type === 'supersede') {
+      setSupersedeModel(newModel)
+      try {
+        await api.setModel({ supersede_model: newModel })
+      } catch (error) {
+        console.error('Failed to save supersede model:', error)
+      }
+    }
+  }
+
+  const handleLLMImportanceToggle = async (enabled: boolean) => {
+    setUseLLMImportance(enabled)
     try {
-      await api.setModel(newModel)
+      await api.setModel({ use_llm_importance: enabled })
     } catch (error) {
-      console.error('Failed to save model:', error)
+      console.error('Failed to save LLM importance setting:', error)
+    }
+  }
+
+  const handleMemorySupersededToggle = async (enabled: boolean) => {
+    setUseMemorySupersede(enabled)
+    try {
+      await api.setModel({ use_memory_supersede: enabled })
+    } catch (error) {
+      console.error('Failed to save memory supersede setting:', error)
     }
   }
 
@@ -449,10 +665,10 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Model Selection - Dynamic */}
+        {/* Model Selection - Dual Models */}
         <section className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-lg font-medium text-white">Model</h3>
+            <h3 className="text-lg font-medium text-white">Model Configuration</h3>
             {isKeySet && (
               <button
                 onClick={loadModels}
@@ -478,35 +694,128 @@ export default function SettingsPage() {
             <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 text-sm">
               {modelsError}
             </div>
-          ) : chatModels.length > 0 ? (
-            <div className="space-y-3">
-              <select
-                value={model}
-                onChange={(e) => handleModelChange(e.target.value)}
-                className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500"
-              >
-                <optgroup label="Chat Models">
-                  {chatModels.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.id}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
+          ) : (
+            <div className="space-y-4">
+              {/* Chat Model */}
+              <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 bg-blue-400 rounded-full" />
+                  <span className="text-gray-300 font-medium">Chat Model</span>
+                  <span className="text-xs text-gray-500">(대화 및 추론)</span>
+                </div>
+                <select
+                  value={chatModel}
+                  onChange={(e) => handleModelChange('chat', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"
+                >
+                  {chatModels.length > 0 ? (
+                    chatModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.id}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="gpt-4o">gpt-4o</option>
+                      <option value="gpt-4o-mini">gpt-4o-mini</option>
+                      <option value="gpt-4-turbo">gpt-4-turbo</option>
+                    </>
+                  )}
+                </select>
+              </div>
+
+              {/* Memory Model */}
+              <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 bg-purple-400 rounded-full" />
+                  <span className="text-gray-300 font-medium">Memory Model</span>
+                  <span className="text-xs text-gray-500">(Importance 평가)</span>
+                </div>
+                <select
+                  value={memoryModel}
+                  onChange={(e) => handleModelChange('memory', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-purple-500"
+                >
+                  {chatModels.length > 0 ? (
+                    chatModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.id}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="gpt-4o-mini">gpt-4o-mini (권장)</option>
+                      <option value="gpt-4o">gpt-4o</option>
+                    </>
+                  )}
+                </select>
+
+                {/* LLM Importance Toggle */}
+                <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                  <div>
+                    <span className="text-gray-400">LLM Importance 평가</span>
+                    <p className="text-xs text-gray-600">새 기억 저장 시 LLM으로 중요도 평가</p>
+                  </div>
+                  <button
+                    onClick={() => handleLLMImportanceToggle(!useLLMImportance)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      useLLMImportance ? 'bg-purple-500' : 'bg-white/10'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        useLLMImportance ? 'translate-x-6' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Supersede Model (MemGPT-style) */}
+              <div className="p-4 rounded-xl bg-white/5 border border-orange-500/30 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 bg-orange-400 rounded-full" />
+                  <span className="text-gray-300 font-medium">Supersede Model</span>
+                  <span className="text-xs text-gray-500">(모순 감지 - MemGPT)</span>
+                </div>
+                <select
+                  value={supersedeModel}
+                  onChange={(e) => handleModelChange('supersede', e.target.value)}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-orange-500"
+                >
+                  {chatModels.length > 0 ? (
+                    chatModels.map((m) => (
+                      <option key={m.id} value={m.id}>{m.id}</option>
+                    ))
+                  ) : (
+                    <>
+                      <option value="gpt-4o-mini">gpt-4o-mini (권장)</option>
+                      <option value="gpt-4o">gpt-4o</option>
+                    </>
+                  )}
+                </select>
+
+                {/* Memory Supersede Toggle */}
+                <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                  <div>
+                    <span className="text-gray-400">모순 감지 & 대체</span>
+                    <p className="text-xs text-gray-600">정정된 기억 자동 대체 (MemGPT 방식)</p>
+                  </div>
+                  <button
+                    onClick={() => handleMemorySupersededToggle(!useMemorySupersede)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      useMemorySupersede ? 'bg-orange-500' : 'bg-white/10'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        useMemorySupersede ? 'translate-x-6' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
               <p className="text-xs text-gray-500">
-                {chatModels.length}개의 채팅 모델, {embeddingModels.length}개의 임베딩 모델 사용 가능
+                💡 Chat: 고성능 | Memory/Supersede: gpt-4o-mini 권장
               </p>
             </div>
-          ) : (
-            <select
-              value={model}
-              onChange={(e) => handleModelChange(e.target.value)}
-              className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-blue-500"
-            >
-              <option value="gpt-4o">GPT-4o</option>
-              <option value="gpt-4o-mini">GPT-4o Mini</option>
-              <option value="gpt-4-turbo">GPT-4 Turbo</option>
-            </select>
           )}
         </section>
 
@@ -580,6 +889,9 @@ export default function SettingsPage() {
             )}
           </div>
         </section>
+
+        {/* Memory Scoring Settings */}
+        <ScoringSection />
 
         {/* About */}
         <section className="mt-12 pt-8 border-t border-white/10">

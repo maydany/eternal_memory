@@ -166,6 +166,7 @@ class EternalMemorySystem(EternalMemoryEngine):
             repository=self.repository,
             llm_client=self.llm,
             vault=self.vault,
+            llm_config=self.config.llm,
         )
         
         # Initialize User Model

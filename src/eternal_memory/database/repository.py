@@ -277,6 +277,38 @@ class MemoryRepository:
                 new_importance,
             )
             return row["mention_count"] if row else 0
+
+    async def supersede_memory_item(
+        self,
+        old_item_id: UUID,
+        new_item_id: UUID,
+    ) -> bool:
+        """
+        MemGPT-style: Mark old memory as superseded by new memory.
+        
+        Based on MemGPT (Berkeley, 2023) core_memory_replace pattern.
+        Old memory is soft-deleted (is_active=False) but preserved for history.
+        
+        Args:
+            old_item_id: The memory being replaced
+            new_item_id: The new memory that replaces it
+            
+        Returns:
+            True if supersede was successful
+        """
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE memory_items 
+                SET is_active = FALSE,
+                    superseded_by = $2,
+                    last_accessed = NOW()
+                WHERE id = $1
+                """,
+                old_item_id,
+                new_item_id,
+            )
+            return result == "UPDATE 1"
     
     # ========== Search Operations ==========
     
@@ -396,9 +428,101 @@ class MemoryRepository:
                     last_accessed=row["last_accessed"],
                 )
                 # Attach score metadata if needed, or just return sorted
-                items.append(item)
+            items.append(item)
             
             return items
+
+    async def generative_agents_search(
+        self,
+        query_embedding: List[float],
+        limit: int = 10,
+        alpha_relevance: float = 1.0,
+        alpha_recency: float = 1.0,
+        alpha_importance: float = 1.0,
+        recency_decay_factor: float = 0.995,
+        min_relevance_threshold: float = 0.3,
+    ) -> List[MemoryItem]:
+        """
+        Search using Generative Agents (Park et al., 2023) scoring formula.
+        
+        Score = α_relevance × Relevance + α_recency × Recency + α_importance × Importance
+        
+        Where:
+        - Relevance: Cosine similarity (1 - cosine_distance)
+        - Recency: Exponential decay decay_factor^(hours_since_last_access)
+        - Importance: Stored importance value (0.0-1.0)
+        
+        Args:
+            query_embedding: Query vector for semantic search
+            limit: Maximum results to return
+            alpha_relevance: Weight for semantic similarity
+            alpha_recency: Weight for time-based decay
+            alpha_importance: Weight for importance score
+            recency_decay_factor: Per-hour decay factor (0.995 default)
+            min_relevance_threshold: Minimum relevance to include
+            
+        Returns:
+            List of MemoryItems sorted by combined score (highest first)
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH scored AS (
+                    SELECT 
+                        mi.*,
+                        c.path as category_path,
+                        -- Relevance: Convert cosine distance to similarity
+                        1 - (mi.embedding <=> $1::vector) as relevance,
+                        -- Recency: Exponential decay based on hours since access
+                        -- decay_factor^hours = e^(hours * ln(decay_factor))
+                        POWER($5::float, 
+                            GREATEST(0, EXTRACT(EPOCH FROM (NOW() - mi.last_accessed)) / 3600.0)
+                        ) as recency,
+                        -- Importance: Direct from storage
+                        mi.importance as importance_score
+                    FROM memory_items mi
+                    LEFT JOIN categories c ON mi.category_id = c.id
+                    WHERE mi.is_active = TRUE
+                      AND 1 - (mi.embedding <=> $1::vector) >= $6
+                )
+                SELECT *,
+                       -- Combined score using alpha weights
+                       ($2::float * relevance + 
+                        $3::float * recency + 
+                        $4::float * importance_score) as final_score
+                FROM scored
+                ORDER BY final_score DESC
+                LIMIT $7
+                """,
+                str(query_embedding),  # $1
+                alpha_relevance,       # $2
+                alpha_recency,         # $3
+                alpha_importance,      # $4
+                recency_decay_factor,  # $5
+                min_relevance_threshold,  # $6
+                limit,                 # $7
+            )
+            
+            items = []
+            for row in rows:
+                item = MemoryItem(
+                    id=row["id"],
+                    content=row["content"],
+                    category_path=row["category_path"] or "",
+                    type=MemoryType(row["type"]),
+                    confidence=row["confidence"],
+                    importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
+                    source_resource_id=row["resource_id"],
+                    created_at=row["created_at"],
+                    last_accessed=row["last_accessed"],
+                )
+                items.append(item)
+                # Update access timestamp for retrieved items
+                await self.update_last_accessed(row["id"])
+            
+            return items
+
     
     async def fulltext_search(
         self,
@@ -678,6 +802,7 @@ class MemoryRepository:
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
+                    is_active=row.get("is_active", True),
                 )
                 for row in rows
             ]

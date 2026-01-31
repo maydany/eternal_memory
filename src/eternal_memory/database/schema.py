@@ -46,6 +46,8 @@ CREATE TABLE IF NOT EXISTS memory_items (
     importance FLOAT DEFAULT 0.5,               -- 0.0 to 1.0 (Salience)
     confidence FLOAT DEFAULT 1.0,               -- 0.0 to 1.0
     mention_count INTEGER DEFAULT 1,            -- Reinforcement counter
+    is_active BOOLEAN DEFAULT TRUE,             -- Soft delete for superseded memories
+    superseded_by UUID REFERENCES memory_items(id),  -- MemGPT-style replacement tracking
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_accessed TIMESTAMPTZ DEFAULT NOW()
 );
@@ -122,6 +124,9 @@ class DatabaseSchema:
             # Migration for existing databases: Add mention_count if it doesn't exist
             try:
                 await conn.execute("ALTER TABLE memory_items ADD COLUMN IF NOT EXISTS mention_count INTEGER DEFAULT 1")
+                # MemGPT-style supersede columns
+                await conn.execute("ALTER TABLE memory_items ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+                await conn.execute("ALTER TABLE memory_items ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES memory_items(id)")
             except Exception:
                 # Fallback for older Postgres versions or if column exists and IF NOT EXISTS is not supported
                 pass

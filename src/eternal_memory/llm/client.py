@@ -479,6 +479,107 @@ Category path:"""
         
         return response.choices[0].message.content.strip()
 
+    async def rate_importance(self, content: str) -> float:
+        """
+        Rate the importance of a memory using LLM (Generative Agents style).
+        
+        Uses a 1-10 integer scale, then normalizes to 0.0-1.0.
+        - 1-3: Trivial (daily routines, casual remarks)
+        - 4-6: Useful (facts, mild preferences)
+        - 7-9: Important (strong preferences, key decisions, relationships)
+        - 10: Critical (life-changing events)
+        
+        Args:
+            content: The memory content to rate
+            
+        Returns:
+            Normalized importance score (0.0-1.0)
+        """
+        prompt = f"""Rate the following memory's importance from 1-10.
+
+Guidelines:
+- 1-3: Trivial (daily routines, casual remarks like "had coffee")
+- 4-6: Useful (facts, mild preferences, general interests)
+- 7-9: Important (strong preferences, key decisions, relationships, goals)
+- 10: Critical (life-changing events, core identity facts)
+
+Memory: "{content}"
+
+Respond with ONLY a single integer (1-10):"""
+
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1,  # Low temperature for consistent ratings
+            max_tokens=5,
+        )
+        await self._report_usage(response)
+        
+        try:
+            score = int(response.choices[0].message.content.strip())
+            # Clamp to valid range and normalize
+            score = max(1, min(10, score))
+            return score / 10.0
+        except (ValueError, IndexError):
+            # Fallback to middle importance
+            return 0.5
+
+    async def is_update_or_correction(
+        self,
+        new_content: str,
+        existing_content: str,
+        model_override: Optional[str] = None,
+    ) -> str:
+        """
+        MemGPT-style: Determine if new memory updates/contradicts existing memory.
+        
+        Based on MemGPT (Berkeley, 2023) core_memory_replace pattern.
+        
+        Args:
+            new_content: The new memory content
+            existing_content: The existing memory content
+            model_override: Optional model to use (for supersede_model)
+            
+        Returns:
+            "UPDATE" - New content updates/corrects existing (should supersede)
+            "ADD" - New content adds new info (keep both)
+            "UNRELATED" - Contents are about different topics
+        """
+        prompt = f"""You are analyzing two memory statements to determine their relationship.
+
+EXISTING MEMORY: "{existing_content}"
+NEW MEMORY: "{new_content}"
+
+Determine the relationship:
+- "UPDATE": The new memory CORRECTS, UPDATES, or CONTRADICTS the existing memory.
+  Examples: name change, status change, preference change, factual correction
+- "ADD": The new memory adds ADDITIONAL information to the same topic.
+  Examples: more details about the same subject, complementary facts
+- "UNRELATED": The memories are about completely different topics.
+
+Reply with ONLY one word: UPDATE, ADD, or UNRELATED"""
+
+        model = model_override or self.model
+        response = await self.client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.0,  # Deterministic
+            max_tokens=10,
+        )
+        await self._report_usage(response)
+        
+        result = response.choices[0].message.content.strip().upper()
+        
+        # Normalize response
+        if "UPDATE" in result:
+            return "UPDATE"
+        elif "ADD" in result:
+            return "ADD"
+        else:
+            return "UNRELATED"
+
+
+
     async def complete(
         self,
         prompt: str,

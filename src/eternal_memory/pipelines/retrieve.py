@@ -6,8 +6,9 @@ Implements the dual-mode retrieval as specified in Section 4 and 5.2:
 - Deep Mode: LLM reads summaries → Opens Markdown → Reasons answer
 """
 
-from typing import List, Literal, Set
+from typing import List, Literal, Optional, Set
 
+from eternal_memory.config import ScoringConfig
 from eternal_memory.database.repository import MemoryRepository
 from eternal_memory.llm.client import LLMClient
 from eternal_memory.models.memory_item import MemoryItem
@@ -29,10 +30,12 @@ class RetrievePipeline:
         repository: MemoryRepository,
         llm_client: LLMClient,
         vault: MarkdownVault,
+        scoring_config: Optional[ScoringConfig] = None,
     ):
         self.repository = repository
         self.llm = llm_client
         self.vault = vault
+        self.scoring = scoring_config or ScoringConfig()
     
     async def execute(
         self,
@@ -65,20 +68,23 @@ class RetrievePipeline:
         evolved_query: str,
     ) -> RetrievalResult:
         """
-        Fast mode: Hybrid search (Vector + Keyword).
+        Fast mode: Generative Agents-style search.
         
-        - Uses newly implemented hybrid_search (RRF)
-        - Returns quickly without LLM reasoning
+        Uses the scoring formula:
+        Score = α_relevance × Relevance + α_recency × Recency + α_importance × Importance
         """
         # Generate query embedding
         query_embedding = await self.llm.generate_embedding(evolved_query)
         
-        # Hybrid search
-        all_items = await self.repository.hybrid_search(
-            query_text=evolved_query,
+        # Use Generative Agents-style search with configurable weights
+        all_items = await self.repository.generative_agents_search(
             query_embedding=query_embedding,
             limit=10,
-            vector_weight=0.7,
+            alpha_relevance=self.scoring.alpha_relevance,
+            alpha_recency=self.scoring.alpha_recency,
+            alpha_importance=self.scoring.alpha_importance,
+            recency_decay_factor=self.scoring.recency_decay_factor,
+            min_relevance_threshold=self.scoring.min_relevance_threshold,
         )
         
         # Get related categories
@@ -107,17 +113,20 @@ class RetrievePipeline:
         """
         Deep mode: LLM reasoning over DB results.
         
-        - Uses hybrid search for high recall
+        - Uses Generative Agents search for high-quality ranking
         - Uses LLM to reason and synthesize answer from DB chunks
         - STRICTLY DB-ONLY: No access to Markdown files
         """
-        # 1. High-recall hybrid search
+        # 1. High-recall Generative Agents search
         query_embedding = await self.llm.generate_embedding(evolved_query)
-        initial_results = await self.repository.hybrid_search(
-            query_text=evolved_query,
+        initial_results = await self.repository.generative_agents_search(
             query_embedding=query_embedding,
             limit=20,  # Higher limit for deep mode
-            vector_weight=0.6,
+            alpha_relevance=self.scoring.alpha_relevance,
+            alpha_recency=self.scoring.alpha_recency,
+            alpha_importance=self.scoring.alpha_importance,
+            recency_decay_factor=self.scoring.recency_decay_factor,
+            min_relevance_threshold=self.scoring.min_relevance_threshold * 0.8,  # Lower threshold for deep mode
         )
         
         # 2. Identify relevant categories from results

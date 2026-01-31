@@ -56,11 +56,61 @@ class ConsolidationConfig(BaseModel):
     interval_hours: int = 24
 
 
+class ScoringConfig(BaseModel):
+    """Memory scoring configuration based on Generative Agents (Park et al., 2023).
+    
+    Retrieval score = α_relevance × Relevance + α_recency × Recency + α_importance × Importance
+    """
+    # Alpha weights for scoring formula
+    alpha_relevance: float = 1.0  # Weight for semantic similarity
+    alpha_recency: float = 1.0    # Weight for time-based decay
+    alpha_importance: float = 1.0 # Weight for memory importance
+    
+    # Recency decay factor (per hour)
+    # 0.995 = Generative Agents default
+    # Score decays as: decay_factor^hours_since_access
+    recency_decay_factor: float = 0.995
+    
+    # Minimum relevance threshold for retrieval
+    min_relevance_threshold: float = 0.3
+
+
+
+
 class LLMConfig(BaseModel):
-    """LLM configuration."""
+    """LLM configuration with dual model support.
+    
+    - chat_model: Used for conversations and reasoning
+    - memory_model: Used for importance rating (lightweight tasks)
+    - supersede_model: Used for contradiction/update detection (MemGPT-style)
+    """
+    # Legacy 'model' field for backwards compatibility
     model: str = "gpt-4o-mini"
+    
+    # Separate models for different tasks
+    chat_model: Optional[str] = None  # Falls back to 'model' if not set
+    memory_model: str = "gpt-4o-mini"  # Lightweight, cheaper model for importance rating
+    supersede_model: str = "gpt-4o-mini"  # Model for update/contradiction detection
+    
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+    
+    # Feature toggles
+    use_llm_importance: bool = False  # Whether to use LLM for importance rating
+    use_memory_supersede: bool = False  # Whether to detect and supersede contradicting memories
+    
+    def get_chat_model(self) -> str:
+        """Get the model to use for chat/reasoning."""
+        return self.chat_model or self.model
+    
+    def get_memory_model(self) -> str:
+        """Get the model to use for memory operations (importance rating)."""
+        return self.memory_model
+    
+    def get_supersede_model(self) -> str:
+        """Get the model to use for contradiction detection."""
+        return self.supersede_model
+
 
 
 class BufferConfig(BaseModel):
@@ -75,8 +125,10 @@ class MemoryConfig(BaseModel):
     retention: RetentionConfig = Field(default_factory=RetentionConfig)
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     consolidation: ConsolidationConfig = Field(default_factory=ConsolidationConfig)
+    scoring: ScoringConfig = Field(default_factory=ScoringConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     buffer: BufferConfig = Field(default_factory=BufferConfig)
+
 
 
 def load_config(config_path: Optional[Path] = None) -> MemoryConfig:

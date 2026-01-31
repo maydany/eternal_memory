@@ -18,6 +18,7 @@ from eternal_memory.llm.client import LLMClient
 from eternal_memory.models.memory_item import Category, MemoryItem, MemoryType, Resource
 from eternal_memory.vault.markdown_vault import MarkdownVault
 from eternal_memory.pipelines.hooks import PipelineHookManager
+from eternal_memory.config import LLMConfig
 
 
 class MemorizePipeline:
@@ -35,10 +36,12 @@ class MemorizePipeline:
         llm_client: LLMClient,
         vault: MarkdownVault,
         enable_monitoring: bool = True,
+        llm_config: Optional[LLMConfig] = None,
     ):
         self.repository = repository
         self.llm = llm_client
         self.vault = vault
+        self.llm_config = llm_config or LLMConfig()
         
         # Initialize hook system
         self.hooks = PipelineHookManager()
@@ -261,17 +264,64 @@ class MemorizePipeline:
             # Let LLM refine the path
             category_path = await self.llm.suggest_category(content, candidate_paths)
 
-        # 4. Process and persist
+        # 4. LLM-based importance rating if enabled
+        final_importance = importance
+        if self.llm_config.use_llm_importance and importance == 0.5:
+            # Only rate if using default importance (not already set)
+            try:
+                final_importance = await self.llm.rate_importance(content)
+            except Exception as e:
+                # Fallback to default on error
+                final_importance = 0.5
+        
+        # 5. Process and persist
         item = await self.process_fact(
             content=content,
             category_path=category_path,
             fact_type=fact_type,
-            importance=importance,
+            importance=final_importance,
             resource_id=resource_id,
             embedding=embedding
         )
         
-        # 5. Update timeline
+        # 6. MemGPT-style supersede: Check for contradicting memories
+        if self.llm_config.use_memory_supersede:
+            try:
+                # Search for similar (but not duplicate) memories
+                similar_candidates = await self.repository.vector_search(
+                    query_embedding=embedding,
+                    limit=3,
+                    threshold=0.85  # Lower than duplicate threshold (0.95)
+                )
+                
+                for candidate in similar_candidates:
+                    # Skip self and duplicates (already handled above)
+                    if candidate.id == item.id:
+                        continue
+                    
+                    # Ask LLM if this is an update/correction
+                    relation = await self.llm.is_update_or_correction(
+                        new_content=content,
+                        existing_content=candidate.content,
+                        model_override=self.llm_config.get_supersede_model(),
+                    )
+                    
+                    if relation == "UPDATE":
+                        # Mark old memory as superseded by new
+                        await self.repository.supersede_memory_item(
+                            old_item_id=candidate.id,
+                            new_item_id=item.id,
+                        )
+                        # Log to timeline
+                        await self.vault.append_to_timeline(
+                            f"🔄 Superseded: '{candidate.content[:50]}...' → '{content[:50]}...'",
+                            datetime.now(),
+                        )
+            except Exception as e:
+                # Supersede is optional, don't fail the whole operation
+                pass
+        
+        # 7. Update timeline
         if not skip_resource:
             await self.vault.append_to_timeline(
                 f"Stored memory: {content[:100]}...",

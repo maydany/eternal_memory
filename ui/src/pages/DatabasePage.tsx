@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Database, RefreshCw, ChevronLeft, ChevronRight, Hash, Trash2, Clock, Play, Plus, X, AlertTriangle, Calendar, HelpCircle } from 'lucide-react';
+import { Database, RefreshCw, ChevronLeft, ChevronRight, Hash, Trash2, Clock, Play, Plus, X, AlertTriangle, Calendar, HelpCircle, Info } from 'lucide-react';
 import { api } from '../api/client';
 import type { ScheduledTask } from '../api/client';
 
@@ -9,7 +9,10 @@ interface MemoryItem {
   category: string;
   type: string;
   importance: number;
+  recency: number;
   mention_count: number;
+  is_active: boolean;
+  last_accessed: string;
   created_at: string;
 }
 
@@ -49,6 +52,7 @@ export default function DatabasePage() {
   const [taskError, setTaskError] = useState<string | null>(null);
   const [triggeringTask, setTriggeringTask] = useState<string | null>(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showScoringModal, setShowScoringModal] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -206,6 +210,109 @@ export default function DatabasePage() {
                 className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-500 text-white rounded-xl transition-all font-bold shadow-lg shadow-red-900/20"
               >
                 Reset All Data
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Scoring Explanation Modal */}
+      {showScoringModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-white/10 rounded-2xl p-6 max-w-2xl w-full shadow-2xl animate-in zoom-in-95 duration-200 max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-purple-500/20 rounded-lg text-purple-400">
+                  <Info className="w-5 h-5" />
+                </div>
+                <h3 className="text-xl font-bold text-white">How Memory Scoring Works</h3>
+              </div>
+              <button onClick={() => setShowScoringModal(false)} className="text-zinc-400 hover:text-white">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="overflow-y-auto flex-1 space-y-4 pr-2">
+              {/* Formula */}
+              <div className="p-4 bg-gradient-to-r from-purple-500/10 to-cyan-500/10 rounded-xl border border-white/10">
+                <h4 className="text-white font-medium mb-2">📐 Generative Agents Scoring Formula</h4>
+                <code className="text-purple-300 text-sm block bg-black/30 p-3 rounded-lg font-mono">
+                  Score = α₁ × Relevance + α₂ × Recency + α₃ × Importance
+                </code>
+                <p className="text-zinc-400 text-xs mt-2">Based on Stanford/Google's "Generative Agents" paper (Park et al., 2023)</p>
+              </div>
+
+              {/* Importance */}
+              <div className="p-4 bg-zinc-800/50 rounded-xl border border-white/5">
+                <div className="flex items-center space-x-2 mb-2">
+                  <div className="w-3 h-3 bg-purple-500 rounded-full"></div>
+                  <span className="text-purple-400 font-medium">Importance (중요도)</span>
+                </div>
+                <p className="text-zinc-300 text-sm leading-relaxed">
+                  기억의 <strong>본질적 중요도</strong>를 나타냅니다. LLM이 기억 저장 시 평가하거나, 기본값 0.5가 사용됩니다.
+                </p>
+                <ul className="text-zinc-400 text-xs mt-2 space-y-1">
+                  <li>• 범위: 0.0 ~ 1.0</li>
+                  <li>• 1.0 = 매우 중요 (이름, 생년월일 등)</li>
+                  <li>• 0.5 = 보통 (일반적인 선호도)</li>
+                  <li>• 0.1 = 낮음 (일시적인 정보)</li>
+                </ul>
+              </div>
+
+              {/* Recency */}
+              <div className="p-4 bg-zinc-800/50 rounded-xl border border-white/5">
+                <div className="flex items-center space-x-2 mb-2">
+                  <div className="w-3 h-3 bg-cyan-500 rounded-full"></div>
+                  <span className="text-cyan-400 font-medium">Recency (최신성)</span>
+                </div>
+                <p className="text-zinc-300 text-sm leading-relaxed">
+                  <strong>마지막 접근 이후 시간</strong>에 따라 감쇠합니다. 최근에 접근한 기억일수록 높은 점수를 받습니다.
+                </p>
+                <code className="text-cyan-300 text-xs block bg-black/30 p-2 rounded-lg font-mono mt-2">
+                  Recency = 0.995^(hours since last access)
+                </code>
+                <ul className="text-zinc-400 text-xs mt-2 space-y-1">
+                  <li>• 방금 접근: ~1.000</li>
+                  <li>• 1일 전: ~0.887</li>
+                  <li>• 7일 전: ~0.430</li>
+                  <li>• 30일 전: ~0.024</li>
+                </ul>
+              </div>
+
+              {/* Active Status */}
+              <div className="p-4 bg-zinc-800/50 rounded-xl border border-white/5">
+                <div className="flex items-center space-x-2 mb-2">
+                  <span className="px-2 py-0.5 bg-green-500/20 text-green-400 text-xs rounded border border-green-500/30">✓</span>
+                  <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded border border-red-500/30">✗</span>
+                  <span className="text-white font-medium">Active Status (활성 상태)</span>
+                </div>
+                <p className="text-zinc-300 text-sm leading-relaxed">
+                  <strong>MemGPT-style Supersede</strong> 시스템입니다. 모순되는 새 정보가 들어오면 이전 기억은 비활성화됩니다.
+                </p>
+                <ul className="text-zinc-400 text-xs mt-2 space-y-1">
+                  <li>• <span className="text-green-400">✓ Active</span>: 현재 유효한 기억 (검색 결과에 포함)</li>
+                  <li>• <span className="text-red-400">✗ Superseded</span>: 대체된 기억 (검색 결과에서 제외, 히스토리용 보존)</li>
+                </ul>
+              </div>
+
+              {/* Settings tip */}
+              <div className="p-4 bg-blue-500/10 border border-blue-500/20 rounded-xl">
+                <h4 className="text-blue-400 font-medium mb-2 flex items-center gap-2">
+                  <span>💡</span> 설정 팁
+                </h4>
+                <p className="text-zinc-300 text-sm">
+                  Settings 페이지에서 가중치(α₁, α₂, α₃)와 감쇠율을 조절할 수 있습니다. 
+                  또한 <strong>LLM Importance</strong>와 <strong>Supersede</strong> 기능을 활성화/비활성화할 수 있습니다.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 pt-4 border-t border-white/10">
+              <button
+                onClick={() => setShowScoringModal(false)}
+                className="w-full px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-xl transition-all font-medium border border-white/5"
+              >
+                닫기
               </button>
             </div>
           </div>
@@ -433,14 +540,23 @@ export default function DatabasePage() {
         </div>
         <div className="flex items-center space-x-2">
           {activeTab === 'memories' && (
-            <button
-              onClick={() => setShowConfirm(true)}
-              disabled={loading}
-              className="flex items-center px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition-all text-sm font-medium"
-            >
-              <Trash2 className={`w-4 h-4 mr-2 ${loading ? 'animate-pulse' : ''}`} />
-              Reset System
-            </button>
+            <>
+              <button
+                onClick={() => setShowScoringModal(true)}
+                className="flex items-center px-4 py-2 bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/20 rounded-lg transition-all text-sm font-medium"
+              >
+                <Info className="w-4 h-4 mr-2" />
+                How it works
+              </button>
+              <button
+                onClick={() => setShowConfirm(true)}
+                disabled={loading}
+                className="flex items-center px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 rounded-lg transition-all text-sm font-medium"
+              >
+                <Trash2 className={`w-4 h-4 mr-2 ${loading ? 'animate-pulse' : ''}`} />
+                Reset System
+              </button>
+            </>
           )}
           {activeTab === 'tasks' && (
             <>
@@ -507,21 +623,23 @@ export default function DatabasePage() {
                   <tr>
                     <th className="p-4 w-20">Type</th>
                     <th className="p-4">Content</th>
-                    <th className="p-4 w-40">Category</th>
-                    <th className="p-4 w-24 text-center">Score</th>
-                    <th className="p-4 w-40">Created At</th>
+                    <th className="p-4 w-32">Category</th>
+                    <th className="p-4 w-24 text-center">Importance</th>
+                    <th className="p-4 w-24 text-center">Recency</th>
+                    <th className="p-4 w-16 text-center">Active</th>
+                    <th className="p-4 w-36">Last Accessed</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {loading && !data ? (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-zinc-500">
+                      <td colSpan={7} className="p-8 text-center text-zinc-500">
                         Loading records...
                       </td>
                     </tr>
                   ) : data?.items.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-zinc-500">
+                      <td colSpan={7} className="p-8 text-center text-zinc-500">
                         No records found.
                       </td>
                     </tr>
@@ -565,8 +683,26 @@ export default function DatabasePage() {
                             {item.mention_count > 1 && <span className="text-purple-400 ml-1">(x{item.mention_count})</span>}
                           </span>
                         </td>
+                        <td className="p-4 text-center">
+                          <div className="w-full bg-zinc-800 rounded-full h-1.5 mb-1">
+                            <div 
+                              className="bg-cyan-500 h-1.5 rounded-full" 
+                              style={{ width: `${Math.min(100, item.recency * 100)}%` }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-zinc-500">
+                            {item.recency.toFixed(3)}
+                          </span>
+                        </td>
+                        <td className="p-4 text-center">
+                          {item.is_active ? (
+                            <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded border border-green-500/30">✓</span>
+                          ) : (
+                            <span className="px-2 py-1 bg-red-500/20 text-red-400 text-xs rounded border border-red-500/30" title="Superseded">✗</span>
+                          )}
+                        </td>
                         <td className="p-4 text-zinc-500 text-xs font-mono">
-                          {new Date(item.created_at).toLocaleString()}
+                          {new Date(item.last_accessed).toLocaleString()}
                         </td>
                       </tr>
                     ))

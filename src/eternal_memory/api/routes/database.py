@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
+import math
 
 from eternal_memory.api.main import get_memory_system
 
@@ -19,7 +20,10 @@ class MemoryItemResponse(BaseModel):
     category: str
     type: str
     importance: float
+    recency: float
     mention_count: int
+    is_active: bool
+    last_accessed: datetime
     created_at: datetime
 
 class PaginatedResponse(BaseModel):
@@ -44,6 +48,10 @@ async def list_items(
         items = await system.repository.list_items(limit=size, offset=offset)
         total = await system.repository.count_items()
         
+        # Calculate recency for each item using decay factor
+        decay_factor = 0.995  # Per-hour decay
+        now = datetime.now()
+        
         return {
             "items": [
                 {
@@ -52,7 +60,10 @@ async def list_items(
                     "category": item.category_path,
                     "type": item.type.value if hasattr(item.type, "value") else str(item.type),
                     "importance": item.importance,
+                    "recency": round(math.pow(decay_factor, max(0, (now - item.last_accessed.replace(tzinfo=None)).total_seconds() / 3600)), 3),
                     "mention_count": getattr(item, "mention_count", 1),
+                    "is_active": getattr(item, "is_active", True),
+                    "last_accessed": item.last_accessed,
                     "created_at": item.created_at,
                 }
                 for item in items

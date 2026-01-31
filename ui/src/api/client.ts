@@ -192,13 +192,48 @@ class ApiClient {
     }>(`/settings/models?provider=${provider}`);
   }
 
-  // Set selected model
-  async setModel(model: string) {
-    return this.request<{ success: boolean; message: string }>(
-      `/settings/model?model=${encodeURIComponent(model)}`,
-      { method: 'PUT' }
-    );
+  // Set selected model(s)
+  async setModel(options: {
+    model?: string;
+    chat_model?: string;
+    memory_model?: string;
+    supersede_model?: string;
+    use_llm_importance?: boolean;
+    use_memory_supersede?: boolean;
+  }) {
+    const params = new URLSearchParams();
+    if (options.model) params.append('model', options.model);
+    if (options.chat_model) params.append('chat_model', options.chat_model);
+    if (options.memory_model) params.append('memory_model', options.memory_model);
+    if (options.supersede_model) params.append('supersede_model', options.supersede_model);
+    if (options.use_llm_importance !== undefined) {
+      params.append('use_llm_importance', options.use_llm_importance.toString());
+    }
+    if (options.use_memory_supersede !== undefined) {
+      params.append('use_memory_supersede', options.use_memory_supersede.toString());
+    }
+    return this.request<{
+      success: boolean;
+      message: string;
+      settings: Record<string, unknown>;
+    }>(`/settings/model?${params.toString()}`, { method: 'PUT' });
   }
+
+  // Get model configuration
+  async getModelConfig() {
+    return this.request<{
+      model: string;
+      chat_model: string | null;
+      memory_model: string;
+      supersede_model: string;
+      use_llm_importance: boolean;
+      use_memory_supersede: boolean;
+      effective_chat_model: string;
+      effective_memory_model: string;
+      effective_supersede_model: string;
+    }>('/settings/model-config');
+  }
+
 
   // Buffer settings
   async getBufferSettings() {
@@ -221,6 +256,53 @@ class ApiClient {
       message: string;
       settings: { flush_threshold_tokens: number; auto_flush_enabled: boolean };
     }>(`/settings/buffer?${params.toString()}`, { method: 'PUT' });
+  }
+
+  // Scoring settings (Generative Agents-style)
+  async getScoringSettings() {
+    return this.request<{
+      alpha_relevance: number;
+      alpha_recency: number;
+      alpha_importance: number;
+      recency_decay_factor: number;
+      min_relevance_threshold: number;
+    }>('/settings/scoring');
+  }
+
+  async updateScoringSettings(settings: {
+    alpha_relevance?: number;
+    alpha_recency?: number;
+    alpha_importance?: number;
+    recency_decay_factor?: number;
+    min_relevance_threshold?: number;
+  }) {
+    const params = new URLSearchParams();
+    if (settings.alpha_relevance !== undefined) {
+      params.append('alpha_relevance', settings.alpha_relevance.toString());
+    }
+    if (settings.alpha_recency !== undefined) {
+      params.append('alpha_recency', settings.alpha_recency.toString());
+    }
+    if (settings.alpha_importance !== undefined) {
+      params.append('alpha_importance', settings.alpha_importance.toString());
+    }
+    if (settings.recency_decay_factor !== undefined) {
+      params.append('recency_decay_factor', settings.recency_decay_factor.toString());
+    }
+    if (settings.min_relevance_threshold !== undefined) {
+      params.append('min_relevance_threshold', settings.min_relevance_threshold.toString());
+    }
+    return this.request<{
+      success: boolean;
+      message: string;
+      settings: {
+        alpha_relevance: number;
+        alpha_recency: number;
+        alpha_importance: number;
+        recency_decay_factor: number;
+        min_relevance_threshold: number;
+      };
+    }>(`/settings/scoring?${params.toString()}`, { method: 'PUT' });
   }
 
   // Schedule endpoints

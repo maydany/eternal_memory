@@ -60,6 +60,10 @@ class MemoryItem(BaseModel):
     )
     created_at: datetime = Field(default_factory=datetime.now)
     last_accessed: datetime = Field(default_factory=datetime.now)
+    is_active: bool = Field(
+        default=True,
+        description="Whether this memory is active (not superseded)"
+    )
     
     class Config:
         use_enum_values = True

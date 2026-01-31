@@ -278,9 +278,24 @@ async def get_available_models(provider: str = "openai"):
 
 
 @router.put("/model")
-async def set_model(model: str):
+async def set_model(
+    model: Optional[str] = None,
+    chat_model: Optional[str] = None,
+    memory_model: Optional[str] = None,
+    supersede_model: Optional[str] = None,
+    use_llm_importance: Optional[bool] = None,
+    use_memory_supersede: Optional[bool] = None,
+):
     """
-    Set the selected model for the LLM provider.
+    Set the selected model(s) for the LLM provider.
+    
+    Args:
+        model: Legacy single model (for backwards compatibility)
+        chat_model: Model for conversations and reasoning
+        memory_model: Model for importance rating (lightweight)
+        supersede_model: Model for contradiction detection (MemGPT-style)
+        use_llm_importance: Whether to use LLM for importance rating
+        use_memory_supersede: Whether to detect and supersede contradicting memories
     """
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     
@@ -290,19 +305,75 @@ async def set_model(model: str):
         async with aiofiles.open(CONFIG_PATH, "r") as f:
             config = yaml.safe_load(await f.read()) or {}
     
-    # Update model
+    # Update models
     if "llm" not in config:
         config["llm"] = {}
-    config["llm"]["model"] = model
     
-    # Also update environment variable for immediate use
-    os.environ["OPENAI_MODEL"] = model
+    if model is not None:
+        config["llm"]["model"] = model
+        os.environ["OPENAI_MODEL"] = model
+    
+    if chat_model is not None:
+        config["llm"]["chat_model"] = chat_model
+    
+    if memory_model is not None:
+        config["llm"]["memory_model"] = memory_model
+    
+    if supersede_model is not None:
+        config["llm"]["supersede_model"] = supersede_model
+    
+    if use_llm_importance is not None:
+        config["llm"]["use_llm_importance"] = use_llm_importance
+    
+    if use_memory_supersede is not None:
+        config["llm"]["use_memory_supersede"] = use_memory_supersede
     
     # Save
     async with aiofiles.open(CONFIG_PATH, "w") as f:
         await f.write(yaml.dump(config, allow_unicode=True))
     
-    return {"success": True, "message": f"Model set to {model}"}
+    return {
+        "success": True,
+        "message": "Model settings updated",
+        "settings": config["llm"],
+    }
+
+
+@router.get("/model-config")
+async def get_model_config():
+    """
+    Get current model configuration for chat, memory, and supersede.
+    """
+    settings = {
+        "model": "gpt-4o-mini",
+        "chat_model": None,
+        "memory_model": "gpt-4o-mini",
+        "supersede_model": "gpt-4o-mini",
+        "use_llm_importance": False,
+        "use_memory_supersede": False,
+    }
+    
+    if CONFIG_PATH.exists():
+        try:
+            async with aiofiles.open(CONFIG_PATH, "r") as f:
+                config = yaml.safe_load(await f.read()) or {}
+            
+            if "llm" in config:
+                settings["model"] = config["llm"].get("model", "gpt-4o-mini")
+                settings["chat_model"] = config["llm"].get("chat_model")
+                settings["memory_model"] = config["llm"].get("memory_model", "gpt-4o-mini")
+                settings["supersede_model"] = config["llm"].get("supersede_model", "gpt-4o-mini")
+                settings["use_llm_importance"] = config["llm"].get("use_llm_importance", False)
+                settings["use_memory_supersede"] = config["llm"].get("use_memory_supersede", False)
+        except Exception:
+            pass
+    
+    # Compute effective models
+    settings["effective_chat_model"] = settings["chat_model"] or settings["model"]
+    settings["effective_memory_model"] = settings["memory_model"]
+    settings["effective_supersede_model"] = settings["supersede_model"]
+    
+    return settings
 
 
 @router.get("/buffer")
@@ -379,3 +450,129 @@ async def update_buffer_settings(
         "settings": config["buffer"],
     }
 
+
+@router.get("/scoring")
+async def get_scoring_settings():
+    """
+    Get current memory scoring settings.
+    
+    Returns the α weights and decay factor for the Generative Agents-style
+    retrieval scoring formula.
+    """
+    settings = {
+        "alpha_relevance": 1.0,
+        "alpha_recency": 1.0,
+        "alpha_importance": 1.0,
+        "recency_decay_factor": 0.995,
+        "min_relevance_threshold": 0.3,
+    }
+    
+    if CONFIG_PATH.exists():
+        try:
+            async with aiofiles.open(CONFIG_PATH, "r") as f:
+                config = yaml.safe_load(await f.read()) or {}
+            
+            if "scoring" in config:
+                settings["alpha_relevance"] = config["scoring"].get(
+                    "alpha_relevance", 1.0
+                )
+                settings["alpha_recency"] = config["scoring"].get(
+                    "alpha_recency", 1.0
+                )
+                settings["alpha_importance"] = config["scoring"].get(
+                    "alpha_importance", 1.0
+                )
+                settings["recency_decay_factor"] = config["scoring"].get(
+                    "recency_decay_factor", 0.995
+                )
+                settings["min_relevance_threshold"] = config["scoring"].get(
+                    "min_relevance_threshold", 0.3
+                )
+        except Exception:
+            pass
+    
+    return settings
+
+
+@router.put("/scoring")
+async def update_scoring_settings(
+    alpha_relevance: Optional[float] = None,
+    alpha_recency: Optional[float] = None,
+    alpha_importance: Optional[float] = None,
+    recency_decay_factor: Optional[float] = None,
+    min_relevance_threshold: Optional[float] = None,
+):
+    """
+    Update memory scoring settings.
+    
+    Based on Generative Agents (Park et al., 2023):
+    Score = α_relevance × Relevance + α_recency × Recency + α_importance × Importance
+    
+    Args:
+        alpha_relevance: Weight for semantic similarity (0.0-3.0)
+        alpha_recency: Weight for time-based decay (0.0-3.0)
+        alpha_importance: Weight for memory importance (0.0-3.0)
+        recency_decay_factor: Decay per hour (0.9-0.999)
+        min_relevance_threshold: Minimum relevance to include (0.0-1.0)
+    """
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load existing config
+    config = {}
+    if CONFIG_PATH.exists():
+        async with aiofiles.open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(await f.read()) or {}
+    
+    # Update scoring settings
+    if "scoring" not in config:
+        config["scoring"] = {}
+    
+    if alpha_relevance is not None:
+        if not 0.0 <= alpha_relevance <= 3.0:
+            raise HTTPException(
+                status_code=400,
+                detail="alpha_relevance must be between 0.0 and 3.0"
+            )
+        config["scoring"]["alpha_relevance"] = alpha_relevance
+    
+    if alpha_recency is not None:
+        if not 0.0 <= alpha_recency <= 3.0:
+            raise HTTPException(
+                status_code=400,
+                detail="alpha_recency must be between 0.0 and 3.0"
+            )
+        config["scoring"]["alpha_recency"] = alpha_recency
+    
+    if alpha_importance is not None:
+        if not 0.0 <= alpha_importance <= 3.0:
+            raise HTTPException(
+                status_code=400,
+                detail="alpha_importance must be between 0.0 and 3.0"
+            )
+        config["scoring"]["alpha_importance"] = alpha_importance
+    
+    if recency_decay_factor is not None:
+        if not 0.9 <= recency_decay_factor <= 0.999:
+            raise HTTPException(
+                status_code=400,
+                detail="recency_decay_factor must be between 0.9 and 0.999"
+            )
+        config["scoring"]["recency_decay_factor"] = recency_decay_factor
+    
+    if min_relevance_threshold is not None:
+        if not 0.0 <= min_relevance_threshold <= 1.0:
+            raise HTTPException(
+                status_code=400,
+                detail="min_relevance_threshold must be between 0.0 and 1.0"
+            )
+        config["scoring"]["min_relevance_threshold"] = min_relevance_threshold
+    
+    # Save
+    async with aiofiles.open(CONFIG_PATH, "w") as f:
+        await f.write(yaml.dump(config, allow_unicode=True))
+    
+    return {
+        "success": True,
+        "message": "Scoring settings updated",
+        "settings": config["scoring"],
+    }
