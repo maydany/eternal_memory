@@ -73,6 +73,7 @@ check_postgres
 
 # Start Backend
 echo -e "${CYAN}🔧 Starting Backend...${NC}"
+source setting/.env
 source .venv/bin/activate
 uvicorn eternal_memory.api.main:app --host 0.0.0.0 --port 8000 &
 PID_BACKEND=$!
@@ -84,6 +85,8 @@ sleep 3
 # Start Frontend
 echo -e "${CYAN}🎨 Starting Frontend...${NC}"
 cd ui
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 npm run dev &
 PID_FRONTEND=$!
 

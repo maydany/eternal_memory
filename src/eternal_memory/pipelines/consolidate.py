@@ -22,6 +22,9 @@ class ConsolidatePipeline:
     
     Implements the "Self-Evolution" aspect of the memory system
     by managing memory lifecycle.
+    
+    Note: USER.md updates are handled by a separate profile_reflection job,
+    not by this pipeline. This follows the Single Responsibility Principle.
     """
     
     def __init__(

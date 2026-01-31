@@ -26,9 +26,9 @@ from eternal_memory.pipelines.flush import FlushPipeline
 from eternal_memory.pipelines.predict import PredictPipeline
 from eternal_memory.pipelines.retrieve import RetrievePipeline
 from eternal_memory.scheduling.scheduler import CronScheduler
-from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance, get_job_function
-from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance, get_job_function
+from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance, job_profile_reflection, get_job_function
 from eternal_memory.vault.markdown_vault import MarkdownVault
+from eternal_memory.agent.user_model import UserModel
 
 
 class EternalMemorySystem(EternalMemoryEngine):
@@ -92,7 +92,7 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         # Conversation buffer state
         self.conversation_buffer: list[dict] = []
-        self.FLUSH_THRESHOLD_TOKENS = 1000  # Reasonable threshold for production
+        self.FLUSH_THRESHOLD_TOKENS = self.config.buffer.flush_threshold_tokens
         
         # Buffer persistence file
         vault_base = Path(vault_path) if vault_path else Path.home() / ".openclaw"
@@ -101,6 +101,9 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         # Scheduler
         self.scheduler = CronScheduler()
+        
+        # User Model (agent/USER.md)
+        self.user_model = UserModel()
         
         self._initialized = False
 
@@ -162,6 +165,9 @@ class EternalMemorySystem(EternalMemoryEngine):
             vault=self.vault,
         )
         
+        # Initialize User Model
+        await self.user_model.initialize()
+        
         self._retrieve_pipeline = RetrievePipeline(
             repository=self.repository,
             llm_client=self.llm,
@@ -187,13 +193,7 @@ class EternalMemorySystem(EternalMemoryEngine):
             llm_client=self.llm,
             vault=self.vault,
             memorize_pipeline=self._memorize_pipeline,
-        )
-        
-        self._flush_pipeline = FlushPipeline(
-            repository=self.repository,
-            llm_client=self.llm,
-            vault=self.vault,
-            memorize_pipeline=self._memorize_pipeline,
+            user_model=self.user_model,  # Enable immediate user insight capture
         )
         
         # Register standard cron jobs
@@ -212,6 +212,15 @@ class EternalMemorySystem(EternalMemoryEngine):
             interval_seconds=43200, 
             func=lambda: job_maintenance(self),
             job_type="maintenance",
+            is_system=True,
+        )
+        
+        # Profile Reflection (every 24h = 86400s, runs 1 hour after daily_reflection)
+        self.scheduler.add_job(
+            name="profile_reflection",
+            interval_seconds=86400,
+            func=lambda: job_profile_reflection(self),
+            job_type="profile_reflection",
             is_system=True,
         )
         
@@ -241,6 +250,13 @@ class EternalMemorySystem(EternalMemoryEngine):
             name="monthly_summary",
             job_type="monthly_summary",
             interval_seconds=2592000,  # 30 days
+            enabled=True,
+            is_system=True,
+        )
+        await self.repository.save_scheduled_task(
+            name="profile_reflection",
+            job_type="profile_reflection",
+            interval_seconds=86400,  # 24h
             enabled=True,
             is_system=True,
         )
@@ -559,6 +575,22 @@ class EternalMemorySystem(EternalMemoryEngine):
             await self.initialize()
         
         return await self.schema.get_stats()
+
+    async def get_user_context(self) -> str:
+        """
+        Get curated user context for system prompt injection.
+        
+        Returns the contents of USER.md (without frontmatter) formatted
+        for inclusion in LLM system prompts.
+        
+        Returns:
+            Markdown-formatted user profile
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        return await self.user_model.get_context_string()
+
 
     async def reset_system(self) -> None:
         """

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink } from 'react-router-dom'
-import { MessageSquare, LayoutGrid, Settings, Database, RefreshCw, Brain, FolderOpen } from 'lucide-react'
+import { MessageSquare, LayoutGrid, Settings, Database, RefreshCw, Brain, FolderOpen, Activity } from 'lucide-react'
 import { api } from '../api/client'
+
 
 export default function Layout() {
   const [stats, setStats] = useState({ items: 0, categories: 0 })
@@ -70,6 +71,10 @@ export default function Layout() {
           <NavLink to="/timeline" className={linkClass}>
             <LayoutGrid className="w-5 h-5" />
             <span>Timeline</span>
+          </NavLink>
+          <NavLink to="/metrics" className={linkClass}>
+            <Activity className="w-5 h-5" />
+            <span>Performance</span>
           </NavLink>
           <NavLink to="/settings" className={linkClass}>
             <Settings className="w-5 h-5" />

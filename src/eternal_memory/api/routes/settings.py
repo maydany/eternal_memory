@@ -303,3 +303,79 @@ async def set_model(model: str):
         await f.write(yaml.dump(config, allow_unicode=True))
     
     return {"success": True, "message": f"Model set to {model}"}
+
+
+@router.get("/buffer")
+async def get_buffer_settings():
+    """
+    Get current buffer/flush settings.
+    """
+    settings = {
+        "flush_threshold_tokens": 4000,  # Default
+        "auto_flush_enabled": True,
+    }
+    
+    if CONFIG_PATH.exists():
+        try:
+            async with aiofiles.open(CONFIG_PATH, "r") as f:
+                config = yaml.safe_load(await f.read()) or {}
+            
+            if "buffer" in config:
+                settings["flush_threshold_tokens"] = config["buffer"].get(
+                    "flush_threshold_tokens", 4000
+                )
+                settings["auto_flush_enabled"] = config["buffer"].get(
+                    "auto_flush_enabled", True
+                )
+        except Exception:
+            pass
+    
+    return settings
+
+
+@router.put("/buffer")
+async def update_buffer_settings(
+    flush_threshold_tokens: Optional[int] = None,
+    auto_flush_enabled: Optional[bool] = None,
+):
+    """
+    Update buffer/flush settings.
+    
+    Args:
+        flush_threshold_tokens: Token threshold before auto-flush (1000-10000)
+        auto_flush_enabled: Whether to auto-flush on threshold
+    """
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Load existing config
+    config = {}
+    if CONFIG_PATH.exists():
+        async with aiofiles.open(CONFIG_PATH, "r") as f:
+            config = yaml.safe_load(await f.read()) or {}
+    
+    # Update buffer settings
+    if "buffer" not in config:
+        config["buffer"] = {}
+    
+    if flush_threshold_tokens is not None:
+        # Validate range
+        if not 1000 <= flush_threshold_tokens <= 10000:
+            raise HTTPException(
+                status_code=400,
+                detail="flush_threshold_tokens must be between 1000 and 10000"
+            )
+        config["buffer"]["flush_threshold_tokens"] = flush_threshold_tokens
+    
+    if auto_flush_enabled is not None:
+        config["buffer"]["auto_flush_enabled"] = auto_flush_enabled
+    
+    # Save
+    async with aiofiles.open(CONFIG_PATH, "w") as f:
+        await f.write(yaml.dump(config, allow_unicode=True))
+    
+    return {
+        "success": True,
+        "message": "Buffer settings updated",
+        "settings": config["buffer"],
+    }
+

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Key, CheckCircle, XCircle, Loader2, Server, Save, RefreshCw, Database, HardDrive, Trash2 } from 'lucide-react'
+import { Key, CheckCircle, XCircle, Loader2, Server, Save, RefreshCw, Database, HardDrive, Trash2, Zap } from 'lucide-react'
 import { api } from '../api/client'
 
 interface ModelInfo {
@@ -24,6 +24,11 @@ interface DbStats {
   connected?: boolean
 }
 
+interface BufferSettings {
+  flush_threshold_tokens: number
+  auto_flush_enabled: boolean
+}
+
 export default function SettingsPage() {
   const [provider, setProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
@@ -45,9 +50,14 @@ export default function SettingsPage() {
   const [dbStats, setDbStats] = useState<DbStats | null>(null)
   const [isLoadingDbStats, setIsLoadingDbStats] = useState(false)
 
+  // Buffer settings
+  const [bufferSettings, setBufferSettings] = useState<BufferSettings>({ flush_threshold_tokens: 4000, auto_flush_enabled: true })
+  const [isSavingBuffer, setIsSavingBuffer] = useState(false)
+
   useEffect(() => {
     loadSettings()
     loadDbStats()
+    loadBufferSettings()
   }, [])
 
   // Load models when API key is set
@@ -80,6 +90,29 @@ export default function SettingsPage() {
     } catch (error) {
       console.error('Failed to load settings:', error)
     }
+  }
+
+  const loadBufferSettings = async () => {
+    try {
+      const data = await api.getBufferSettings()
+      setBufferSettings(data)
+    } catch (error) {
+      console.error('Failed to load buffer settings:', error)
+    }
+  }
+
+  const handleUpdateBufferSettings = async (newThreshold: number) => {
+    setIsSavingBuffer(true)
+    try {
+      const result = await api.updateBufferSettings({ flush_threshold_tokens: newThreshold })
+      if (result.success) {
+        setBufferSettings(prev => ({ ...prev, flush_threshold_tokens: newThreshold }))
+      }
+    } catch (error) {
+      console.error('Failed to update buffer settings:', error)
+    }
+    // Keep "저장됨" visible for at least 1.5 seconds
+    setTimeout(() => setIsSavingBuffer(false), 1500)
   }
 
   const loadModels = async () => {
@@ -498,6 +531,54 @@ export default function SettingsPage() {
             <Save className="w-4 h-4" />
             {isSavingPrompt ? 'Saving...' : 'Save System Prompt'}
           </button>
+        </section>
+
+        {/* Buffer Settings */}
+        <section className="space-y-4">
+          <h3 className="text-lg font-medium text-white flex items-center gap-2">
+            <Zap className="w-5 h-5 text-yellow-400" />
+            Memory Buffer
+          </h3>
+          <p className="text-sm text-gray-500">
+            대화 버퍼가 플러시되는 토큰 임계값을 설정합니다. 낮을수록 더 자주 메모리가 저장됩니다.
+          </p>
+          
+          <div className="p-4 rounded-xl bg-white/5 border border-white/10 space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-400">Flush Threshold</span>
+              <span className="text-lg font-bold text-yellow-400">{bufferSettings.flush_threshold_tokens.toLocaleString()} tokens</span>
+            </div>
+            
+            <input
+              type="range"
+              min="1000"
+              max="10000"
+              step="500"
+              value={bufferSettings.flush_threshold_tokens}
+              onChange={(e) => {
+                const newValue = parseInt(e.target.value)
+                setBufferSettings(prev => ({ ...prev, flush_threshold_tokens: newValue }))
+              }}
+              onMouseUp={(e) => handleUpdateBufferSettings(parseInt((e.target as HTMLInputElement).value))}
+              onTouchEnd={(e) => handleUpdateBufferSettings(parseInt((e.target as HTMLInputElement).value))}
+              className="w-full h-2 bg-white/10 rounded-lg appearance-none cursor-pointer accent-yellow-400"
+            />
+            
+            {/* Tick marks with actual positions */}
+            <div className="relative h-4 text-xs text-gray-500">
+              <span className="absolute left-0">1K</span>
+              <span className="absolute" style={{ left: '33.3%', transform: 'translateX(-50%)' }}>4K (권장)</span>
+              <span className="absolute" style={{ left: '66.6%', transform: 'translateX(-50%)' }}>7K</span>
+              <span className="absolute right-0">10K</span>
+            </div>
+            
+            {isSavingBuffer && (
+              <div className="flex items-center gap-2 text-sm text-green-400 animate-pulse">
+                <CheckCircle className="w-4 h-4" />
+                저장됨
+              </div>
+            )}
+          </div>
         </section>
 
         {/* About */}

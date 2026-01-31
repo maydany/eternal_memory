@@ -5,6 +5,8 @@ import VaultPage from './pages/VaultPage'
 import SettingsPage from './pages/SettingsPage'
 import DatabasePage from './pages/DatabasePage'
 import TimelinePage from './pages/TimelinePage'
+import MetricsPage from './pages/MetricsPage'
+
 
 function App() {
   return (
@@ -15,6 +17,7 @@ function App() {
           <Route path="vault" element={<VaultPage />} />
           <Route path="database" element={<DatabasePage />} />
           <Route path="timeline" element={<TimelinePage />} />
+          <Route path="metrics" element={<MetricsPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
       </Routes>

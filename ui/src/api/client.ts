@@ -200,6 +200,29 @@ class ApiClient {
     );
   }
 
+  // Buffer settings
+  async getBufferSettings() {
+    return this.request<{
+      flush_threshold_tokens: number;
+      auto_flush_enabled: boolean;
+    }>('/settings/buffer');
+  }
+
+  async updateBufferSettings(settings: { flush_threshold_tokens?: number; auto_flush_enabled?: boolean }) {
+    const params = new URLSearchParams();
+    if (settings.flush_threshold_tokens !== undefined) {
+      params.append('flush_threshold_tokens', settings.flush_threshold_tokens.toString());
+    }
+    if (settings.auto_flush_enabled !== undefined) {
+      params.append('auto_flush_enabled', settings.auto_flush_enabled.toString());
+    }
+    return this.request<{
+      success: boolean;
+      message: string;
+      settings: { flush_threshold_tokens: number; auto_flush_enabled: boolean };
+    }>(`/settings/buffer?${params.toString()}`, { method: 'PUT' });
+  }
+
   // Schedule endpoints
   async getScheduledJobs() {
     return this.request<ScheduledTask[]>('/schedule/jobs');
@@ -246,6 +269,38 @@ class ApiClient {
 
   async getTimelineStats() {
     return this.request<TimelineStats>('/timeline/stats');
+  }
+
+  // Metrics endpoints
+  async getMetricsSummary() {
+    return this.request<{
+      total_pipelines: number;
+      total_facts: number;
+      avg_duration: number;
+      p95_duration: number;
+      avg_facts_per_pipeline: number;
+      recent_count: number;
+    }>('/metrics/summary');
+  }
+
+  async getRecentMetrics(limit?: number) {
+    const params = limit ? `?limit=${limit}` : '';
+    // API returns nested structure, transform to flat structure for frontend
+    const rawMetrics = await this.request<{
+      timestamp: string;
+      total_duration: number;
+      facts: { extracted: number; stored: number };
+      embeddings: { count: number; batched: boolean };
+      text_length: number;
+    }[]>(`/metrics/recent${params}`);
+    
+    return rawMetrics.map(m => ({
+      timestamp: m.timestamp,
+      duration: m.total_duration,
+      facts_extracted: m.facts?.extracted ?? 0,
+      embeddings_generated: m.embeddings?.count ?? 0,
+      text_length: m.text_length ?? 0,
+    }));
   }
 }
 

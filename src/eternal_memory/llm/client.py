@@ -153,9 +153,20 @@ Return ONLY valid JSON array, no other text."""
         
         try:
             result = json.loads(response.choices[0].message.content)
-            # Handle both {"facts": [...]} and [...] formats
+            # Handle multiple response formats:
+            # 1. {"facts": [...]} or {"items": [...]} - wrapper object
+            # 2. [...] - direct array
+            # 3. {"content": "...", "type": "...", ...} - single fact object
             if isinstance(result, dict):
-                return result.get("facts", result.get("items", []))
+                if "facts" in result:
+                    return result["facts"]
+                elif "items" in result:
+                    return result["items"]
+                elif "content" in result:
+                    # Single fact object, wrap in array
+                    return [result]
+                else:
+                    return []
             return result if isinstance(result, list) else []
         except (json.JSONDecodeError, IndexError):
             return []

@@ -1,0 +1,2 @@
+{"timestamp": "2026-01-31T23:55:22.756901", "type": "pipeline_execution", "total_duration": 3.285, "stages": {"extract": 3.284, "store": 0.878}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 83}
+{"timestamp": "2026-01-31T23:55:24.664552", "type": "pipeline_execution", "total_duration": 2.782, "stages": {"extract": 2.78, "store": 0.017}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 470}

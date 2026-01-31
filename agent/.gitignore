@@ -1,0 +1,15 @@
+# Agent cognitive layer - contains sensitive user data
+# Do NOT commit to version control
+
+# User profile (curated understanding)
+USER.md
+
+# Future files
+SOUL.md
+MEMORY.md
+
+# Backups
+USER_backup_*.md
+
+# Allow example template
+!USER.example.md

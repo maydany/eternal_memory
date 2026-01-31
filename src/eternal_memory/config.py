@@ -11,6 +11,15 @@ from typing import Optional
 import yaml
 from pydantic import BaseModel, Field
 
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    env_path = Path.cwd() / "setting" / ".env"
+    if env_path.exists():
+        load_dotenv(env_path)
+except ImportError:
+    pass  # python-dotenv not installed
+
 
 class DatabaseConfig(BaseModel):
     """Database connection configuration."""
@@ -54,6 +63,12 @@ class LLMConfig(BaseModel):
     base_url: Optional[str] = None
 
 
+class BufferConfig(BaseModel):
+    """Conversation buffer configuration."""
+    flush_threshold_tokens: int = 4000  # OpenClaw default
+    auto_flush_enabled: bool = True
+
+
 class MemoryConfig(BaseModel):
     """Main configuration model."""
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
@@ -61,6 +76,7 @@ class MemoryConfig(BaseModel):
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     consolidation: ConsolidationConfig = Field(default_factory=ConsolidationConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    buffer: BufferConfig = Field(default_factory=BufferConfig)
 
 
 def load_config(config_path: Optional[Path] = None) -> MemoryConfig:
@@ -70,7 +86,7 @@ def load_config(config_path: Optional[Path] = None) -> MemoryConfig:
     Falls back to environment variables and defaults.
     """
     if config_path is None:
-        config_path = Path.cwd() / "user_memory" / "db_setting" / "memory_config.yaml"
+        config_path = Path.cwd() / "user_memory" / "config" / "memory_config.yaml"
     
     config_data = {}
     

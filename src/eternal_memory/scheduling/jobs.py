@@ -103,6 +103,128 @@ async def job_maintenance(system: "EternalMemorySystem"):
         logger.error(f"Maintenance failed: {e}")
 
 
+@register_job("profile_reflection")
+async def job_profile_reflection(system: "EternalMemorySystem"):
+    """
+    Daily Profile Reflection Job.
+    
+    Analyzes recent memories (last 7 days) and updates USER.md
+    with high-quality, long-term insights about the user.
+    
+    Following OpenClaw's philosophy:
+    - Quality threshold: confidence >= 0.7, evidence >= 3
+    - Runs daily (separate from consolidation)
+    - Creates backup before updating USER.md
+    
+    This job is SEPARATE from maintenance/consolidation to follow
+    Single Responsibility Principle.
+    """
+    logger.info("🧠 Executing Profile Reflection...")
+    
+    try:
+        from datetime import timedelta
+        
+        # 1. Check if user_model is available
+        if not hasattr(system, 'user_model') or system.user_model is None:
+            logger.warning("UserModel not initialized, skipping profile reflection")
+            return
+        
+        # 2. Get memories from the last 7 days
+        since = datetime.datetime.now() - timedelta(days=7)
+        recent_memories = await system.repository.get_memories_since(since, limit=200)
+        
+        if not recent_memories:
+            logger.info("No recent memories found for profile reflection (last 7 days).")
+            return
+        
+        logger.info(f"Analyzing {len(recent_memories)} memories for user insights...")
+        
+        # 3. Extract memory contents for LLM analysis
+        memory_contents = [m.content for m in recent_memories]
+        
+        # 4. Ask LLM to extract LONG-TERM insights only
+        insights = await _extract_insights_from_memories(system.llm, memory_contents)
+        
+        if not insights:
+            logger.info("No high-quality long-term insights found.")
+            return
+        
+        # 5. Batch update USER.md (creates one backup, adds all insights)
+        added = await system.user_model.batch_update(insights)
+        
+        logger.info(f"✅ Profile Reflection complete: added {added} insights to USER.md")
+        
+    except Exception as e:
+        logger.error(f"Profile Reflection failed: {e}")
+
+
+async def _extract_insights_from_memories(llm_client, memory_contents: list) -> list:
+    """
+    Use LLM to extract high-quality, long-term insights from memories.
+    
+    Args:
+        llm_client: LLMClient instance
+        memory_contents: List of memory content strings
+    
+    Returns:
+        List of insight dicts with keys: section, content, confidence, evidence_count
+    """
+    # Limit context to avoid token overflow
+    limited_memories = memory_contents[:50]
+    memories_text = "\n".join([f"- {m}" for m in limited_memories])
+    
+    prompt = f"""Analyze these memories from the past 7 days and extract ONLY insights 
+that are valuable for LONG-TERM user understanding.
+
+Criteria for inclusion:
+- Repeated patterns (mentioned 3+ times)
+- Explicit preferences stated by user
+- Consistent work habits
+- Technical context that's likely to remain stable
+
+DO NOT include:
+- One-time events
+- Transient tasks
+- Casual opinions
+- Information with low confidence
+
+Memories to analyze:
+{memories_text}
+
+Output JSON with this exact structure:
+{{
+  "insights": [
+    {{
+      "section": "Established Preferences",
+      "content": "User strongly prefers TypeScript over JavaScript for type safety",
+      "confidence": 0.9,
+      "evidence_count": 5
+    }},
+    {{
+      "section": "Work Patterns",
+      "content": "User is most productive during late evening hours (21:00-01:00)",
+      "confidence": 0.85,
+      "evidence_count": 4
+    }}
+  ]
+}}
+
+Valid sections: "Core Identity", "Established Preferences", "Work Patterns", 
+"Communication Style", "Technical Context", "Constraints"
+
+If no high-quality long-term insights found, return: {{"insights": []}}
+Be conservative - only include information you're very confident about."""
+    
+    try:
+        response = await llm_client.complete(prompt, response_format="json_object")
+        return response.get("insights", [])
+    except Exception as e:
+        logger.error(f"Failed to extract insights from memories: {e}")
+        return []
+
+
+
+
 @register_job("vault_backup")
 async def job_vault_backup(system: "EternalMemorySystem"):
     """

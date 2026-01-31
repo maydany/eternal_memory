@@ -88,3 +88,10 @@ tmp_*/
 *.sqlite
 *.sqlite3
 memory_display_only/
+
+# Agent cognitive layer - contains sensitive user data
+agent/USER.md
+agent/backups/
+!agent/USER.example.md
+!agent/README.md
+!agent/.gitignore
