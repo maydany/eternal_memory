@@ -5,7 +5,12 @@ Integrates all pipelines into a unified system that implements
 the EternalMemoryEngine abstract base class.
 """
 
+import json
+from datetime import datetime
+from pathlib import Path
 from typing import Literal, Optional, List
+
+import aiofiles
 
 from eternal_memory.config import MemoryConfig, load_config
 from eternal_memory.database.repository import MemoryRepository
@@ -87,9 +92,12 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         # Conversation buffer state
         self.conversation_buffer: list[dict] = []
-        # Conversation buffer state
-        self.conversation_buffer: list[dict] = []
         self.FLUSH_THRESHOLD_TOKENS = 1000  # Reasonable threshold for production
+        
+        # Buffer persistence file
+        vault_base = Path(vault_path) if vault_path else Path.home() / ".openclaw"
+        self.buffer_dir = vault_base / "temp"
+        self.buffer_file = self.buffer_dir / "conversation_buffer.jsonl"
         
         # Scheduler
         self.scheduler = CronScheduler()
@@ -115,6 +123,12 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         # Initialize vault
         await self.vault.initialize()
+        
+        # Setup buffer persistence directory
+        self.buffer_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Restore any existing buffer from previous session
+        await self._restore_buffer()
         
         # Ensure standard root categories exist
         standard_roots = [
@@ -233,13 +247,44 @@ class EternalMemorySystem(EternalMemoryEngine):
         self._initialized = True
     
     async def close(self) -> None:
-        """Close all connections and cleanup."""
+        """Close all connections and cleanup with graceful buffer flush."""
+        # Flush remaining buffer before shutdown
+        if self.conversation_buffer:
+            print("⚠️  Flushing remaining buffer before shutdown...")
+            await self.flush_buffer()
+        
         if self.scheduler:
             await self.scheduler.stop()
             
         if self.repository:
             await self.repository.disconnect()
         self._initialized = False
+    
+    async def _restore_buffer(self) -> None:
+        """Restore conversation buffer from file on startup."""
+        if not self.buffer_file.exists():
+            return
+        
+        print(f"🔄 Restoring conversation buffer from {self.buffer_file}...")
+        
+        restored = []
+        async with aiofiles.open(self.buffer_file, "r", encoding="utf-8") as f:
+            async for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    msg = json.loads(line)
+                    restored.append(msg)
+                except json.JSONDecodeError:
+                    continue
+        
+        if restored:
+            self.conversation_buffer = restored
+            print(f"✅ Restored {len(restored)} messages from previous session")
+            
+            # Auto-flush restored buffer immediately
+            await self.flush_buffer()
     
     async def _load_custom_jobs_from_db(self) -> None:
         """Load custom jobs from database and register them with the scheduler."""
@@ -330,23 +375,79 @@ class EternalMemorySystem(EternalMemoryEngine):
         mode: Literal["fast", "deep"] = "fast",
     ) -> RetrievalResult:
         """
-        Recall memories based on query.
+        Recall memories based on query with buffer support.
         
-        Implements dual-mode retrieval:
-        - 'fast': Vector similarity search + Keyword search (RAG mode)
-        - 'deep': LLM reads summaries → Opens Markdown → Reasons answer
+        Searches both:
+        1. Permanent storage (DB)
+        2. Temporary buffer (in-memory)
         
         Args:
             query: Search query
             mode: Retrieval mode ('fast' or 'deep')
             
         Returns:
-            RetrievalResult with matching items and context
+            RetrievalResult with matching items and buffer context
         """
         if not self._initialized:
             await self.initialize()
         
-        return await self._retrieve_pipeline.execute(query, mode)
+        # Build conversation context from buffer for query evolution
+        buffer_context = ""
+        if self.conversation_buffer:
+            buffer_messages = [
+                f"{msg['role']}: {msg['content']}" 
+                for msg in self.conversation_buffer[-10:]
+            ]
+            buffer_context = "\n".join(buffer_messages)
+        
+        # Execute DB retrieval with buffer context
+        result = await self._retrieve_pipeline.execute(
+            query=query,
+            mode=mode,
+            conversation_context=buffer_context,
+        )
+        
+        # Search buffer for relevant matches
+        buffer_matches = self._search_buffer(query)
+        
+        # Inject buffer matches into suggested context
+        if buffer_matches:
+            buffer_snippets = "\n".join([
+                f"- [Recent: {msg['role']}] {msg['content']}" 
+                for msg in buffer_matches
+            ])
+            result.suggested_context = (
+                f"Recent unbuffered conversation:\n{buffer_snippets}\n\n"
+                + result.suggested_context
+            )
+        
+        return result
+    
+    def _search_buffer(self, query: str) -> List[dict]:
+        """
+        Search conversation buffer for relevant messages.
+        
+        Uses simple keyword matching to find recent conversations
+        that might be relevant to the query.
+        """
+        if not self.conversation_buffer:
+            return []
+        
+        query_lower = query.lower()
+        query_words = set(query_lower.split())
+        
+        matches = []
+        for msg in self.conversation_buffer:
+            content_lower = msg['content'].lower()
+            content_words = set(content_lower.split())
+            
+            # Check for keyword overlap
+            overlap = query_words & content_words
+            if overlap or any(word in content_lower for word in query_words):
+                matches.append(msg)
+        
+        # Return last 5 matches (most recent)
+        return matches[-5:]
     
     async def consolidate(self) -> None:
         """
@@ -383,8 +484,19 @@ class EternalMemorySystem(EternalMemoryEngine):
         return await self._predict_pipeline.execute(current_context)
     
     async def add_to_buffer(self, role: str, content: str) -> None:
-        """Add message to conversation buffer."""
-        self.conversation_buffer.append({"role": role, "content": content})
+        """Add message to buffer with persistent storage."""
+        msg = {
+            "role": role,
+            "content": content,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # 1. Add to memory buffer
+        self.conversation_buffer.append(msg)
+        
+        # 2. Persist to file immediately (durability)
+        async with aiofiles.open(self.buffer_file, "a", encoding="utf-8") as f:
+            await f.write(json.dumps(msg, ensure_ascii=False) + "\n")
         
     async def check_and_flush(self) -> List[MemoryItem]:
         """
@@ -408,7 +520,7 @@ class EternalMemorySystem(EternalMemoryEngine):
         return await self.flush_buffer()
         
     async def flush_buffer(self) -> List[MemoryItem]:
-        """Force flush the current buffer to permanent memory."""
+        """Force flush buffer to permanent memory and clean up file."""
         if not self._initialized:
             await self.initialize()
             
@@ -420,8 +532,12 @@ class EternalMemorySystem(EternalMemoryEngine):
         # Execute flush pipeline
         items = await self._flush_pipeline.execute(self.conversation_buffer)
         
-        # Clear buffer after successful flush
+        # Clear memory buffer after successful flush
         self.conversation_buffer = []
+        
+        # Remove persistent file (already processed)
+        if self.buffer_file.exists():
+            self.buffer_file.unlink()
         
         return items
 
