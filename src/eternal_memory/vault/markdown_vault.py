@@ -37,12 +37,12 @@ class MarkdownVault:
         Args:
             base_path: Base path for the vault. Defaults to ~/.openclaw
         """
-        self.base_path = Path(base_path or (Path.cwd() / "user-memory"))
+        self.base_path = Path(base_path or (Path.cwd() / "user_memory"))
         
-        # separate memory path for easy viewing (Option A: Display Only)
-        self.memory_path = Path.cwd() / "memory_display_only"
+        # Markdown memory files under user-memory/markdown
+        self.memory_path = self.base_path / "markdown"
         
-        self.storage_path = self.base_path / "storage"
+        self.storage_path = self.base_path / "db_data"
         self.config_path = self.base_path / "config"
         self.sanitizer = Sanitizer()
     

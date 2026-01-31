@@ -73,7 +73,14 @@ brain/
 artifacts/
 .gemini/
 tmp_openclaw/
-user-memory/
+user_memory/
+setting/*
+!setting/.env.example
+
+# Logs and temporary files
+*.log
+tmp_*/
+
 
 # Database
 *.db

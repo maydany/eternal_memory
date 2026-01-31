@@ -20,7 +20,7 @@ from eternal_memory.engine.memory_engine import EternalMemorySystem
 # Load .env file at startup
 def load_env_file():
     """Load environment variables from ~/.openclaw/.env if it exists."""
-    env_path = Path.cwd() / "user-memory" / ".env"
+    env_path = Path.cwd() / "setting" / ".env"
     if env_path.exists():
         with open(env_path) as f:
             for line in f:

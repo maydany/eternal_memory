@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-CONFIG_PATH = Path.cwd() / "user-memory" / "config" / "memory_config.yaml"
+CONFIG_PATH = Path.cwd() / "user_memory" / "db_setting" / "memory_config.yaml"
 
 
 class LLMSettings(BaseModel):
@@ -37,13 +37,23 @@ async def get_settings():
     Get current application settings.
     
     Returns settings from config file and environment.
-    Note: API keys are masked for security.
+    Note: API keys are masked for security (showing first/last 4 chars).
     """
+    api_key = os.getenv("OPENAI_API_KEY")
+    api_key_masked = None
+    
+    # Mask API key: show first 4 and last 4 characters
+    if api_key and len(api_key) > 8:
+        api_key_masked = f"{api_key[:4]}...{api_key[-4:]}"
+    elif api_key:
+        api_key_masked = "****"
+    
     settings = {
         "llm": {
             "provider": "openai",
             "model": os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
-            "api_key_set": bool(os.getenv("OPENAI_API_KEY")),
+            "api_key_set": bool(api_key),
+            "api_key_masked": api_key_masked,
         },
         "system_prompt": None,
     }
@@ -77,7 +87,7 @@ async def set_api_key(provider: str, api_key: str):
         os.environ["OPENAI_API_KEY"] = api_key
         
         # Also save to .env file for persistence
-        env_path = Path.cwd() / "user-memory" / ".env"
+        env_path = Path.cwd() / "setting" / ".env"
         env_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Read existing .env
@@ -100,6 +110,42 @@ async def set_api_key(provider: str, api_key: str):
         os.chmod(env_path, 0o600)
         
         return {"success": True, "message": "API key saved"}
+    
+    raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
+
+@router.delete("/api-key")
+async def delete_api_key(provider: str):
+    """
+    Delete the API key for an LLM provider.
+    
+    Removes the key from both environment and .env file.
+    """
+    if provider.lower() == "openai":
+        # Remove from environment
+        if "OPENAI_API_KEY" in os.environ:
+            del os.environ["OPENAI_API_KEY"]
+        
+        # Remove from .env file
+        env_path = Path.cwd() / "setting" / ".env"
+        if env_path.exists():
+            existing = {}
+            async with aiofiles.open(env_path, "r") as f:
+                for line in (await f.read()).split("\n"):
+                    if "=" in line and line.strip():
+                        k, v = line.split("=", 1)
+                        # Keep all keys except OPENAI_API_KEY
+                        if k.strip() != "OPENAI_API_KEY":
+                            existing[k.strip()] = v.strip()
+            
+            # Write back without the API key
+            async with aiofiles.open(env_path, "w") as f:
+                if existing:
+                    await f.write("\n".join(f"{k}={v}" for k, v in existing.items()))
+                else:
+                    # If no keys left, write empty file
+                    await f.write("")
+        
+        return {"success": True, "message": "API key deleted"}
     
     raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
 

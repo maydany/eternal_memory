@@ -9,35 +9,44 @@ OpenClaw 스타일의 영구적 기억(Eternal Memory) 시스템 구현체입니
 - **투명성**: 모든 기억 데이터는 Markdown 파일로 미러링
 - **이중 모드 검색**: RAG 기반 + LLM 기반 검색
 
-## Installation
+## Quick Start
+
+### 1. Install Everything
+
+Run the installation script (installs all dependencies, sets up database, configures environment):
 
 ```bash
-cd eternal_memory
-pip install -e ".[dev]"
+./scripts/install.sh
 ```
 
-## Database Setup
+This will automatically:
+- ✅ Install PostgreSQL 16 + pgvector
+- ✅ Create and configure the database
+- ✅ Set up Python virtual environment
+- ✅ Install all Python dependencies
+- ✅ Install UI dependencies
+- ✅ Create configuration files
 
-PostgreSQL 16과 pgvector가 필요합니다:
+### 2. Add Your API Key
+
+The installer will prompt you for your OpenAI API key, or you can add it manually:
 
 ```bash
-brew install postgresql@16 pgvector
-brew services start postgresql@16
-createdb eternal_memory
+# Edit setting/.env and add:
+OPENAI_API_KEY=your_openai_api_key_here
 ```
 
-## Running the Application
+### 3. Run the Application
 
-One command to run the entire system (Database + Backend + Frontend):
+Start everything with one command:
 
 ```bash
 ./scripts/run.sh
 ```
 
-This script will:
-1. Check if PostgreSQL is running (and start it if needed)
-2. Start the Backend API (http://localhost:8000)
-3. Start the Frontend UI (http://localhost:5173)
+This will start:
+- 📡 Backend API (http://localhost:8000)
+- 💻 Frontend UI (http://localhost:5173)
 
 ## Usage
 

@@ -134,7 +134,7 @@ class ApiClient {
   // Settings endpoints
   async getSettings() {
     return this.request<{
-      llm: { provider: string; model: string; api_key_set: boolean };
+      llm: { provider: string; model: string; api_key_set: boolean; api_key_masked?: string | null };
       system_prompt: string | null;
     }>('/settings/');
   }
@@ -143,6 +143,14 @@ class ApiClient {
     return this.request<{ success: boolean; message: string }>(
       `/settings/api-key?provider=${provider}&api_key=${apiKey}`,
       { method: 'POST' }
+    );
+  }
+
+
+  async deleteApiKey(provider: string) {
+    return this.request<{ success: boolean; message: string }>(
+      `/settings/api-key?provider=${provider}`,
+      { method: 'DELETE' }
     );
   }
 

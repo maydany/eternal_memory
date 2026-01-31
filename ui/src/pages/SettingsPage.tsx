@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Key, CheckCircle, XCircle, Loader2, Server, Save, RefreshCw, Database, HardDrive } from 'lucide-react'
+import { Key, CheckCircle, XCircle, Loader2, Server, Save, RefreshCw, Database, HardDrive, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
 
 interface ModelInfo {
@@ -33,6 +33,7 @@ export default function SettingsPage() {
   const [systemPrompt, setSystemPrompt] = useState('')
   const [isSavingPrompt, setIsSavingPrompt] = useState(false)
   const [model, setModel] = useState('gpt-4o-mini')
+  const [settings, setSettings] = useState<any>(null)
   
   // Dynamic model loading
   const [chatModels, setChatModels] = useState<ModelInfo[]>([])
@@ -71,6 +72,7 @@ export default function SettingsPage() {
   const loadSettings = async () => {
     try {
       const data = await api.getSettings()
+      setSettings(data)
       setProvider(data.llm.provider)
       setModel(data.llm.model)
       setIsKeySet(data.llm.api_key_set)
@@ -118,6 +120,21 @@ export default function SettingsPage() {
       setTimeout(() => loadModels(), 500)
     } catch (error) {
       setTestResult({ success: false, message: 'Failed to save API key' })
+    }
+  }
+
+  const handleDeleteApiKey = async () => {
+    if (!confirm('정말로 API 키를 삭제하시겠습니까?')) return
+
+    try {
+      await api.deleteApiKey(provider)
+      setIsKeySet(false)
+      setApiKey('')
+      setChatModels([])
+      setEmbeddingModels([])
+      setTestResult({ success: true, message: 'API key deleted successfully' })
+    } catch (error) {
+      setTestResult({ success: false, message: 'Failed to delete API key' })
     }
   }
 
@@ -345,7 +362,7 @@ export default function SettingsPage() {
               type="password"
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
-              placeholder={isKeySet ? '••••••••••••••••' : 'Enter your API key'}
+              placeholder={isKeySet ? (settings?.llm?.api_key_masked || '••••••••') : 'Enter your API key'}
               className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
             />
             <button
@@ -355,6 +372,16 @@ export default function SettingsPage() {
             >
               Save
             </button>
+            {isKeySet && (
+              <button
+                onClick={handleDeleteApiKey}
+                className="px-4 py-3 bg-red-600/20 border border-red-500/30 rounded-xl text-red-400 hover:bg-red-600/30 hover:text-red-300 transition-all flex items-center gap-2"
+                title="Delete API Key"
+              >
+                <Trash2 className="w-4 h-4" />
+                Delete
+              </button>
+            )}
           </div>
 
           {/* Test connection */}
