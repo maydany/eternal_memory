@@ -1,16 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { Send, Zap, Brain, Loader2, Sparkles, MemoryStick, Database, RefreshCw, Trash2 } from 'lucide-react'
 import { api } from '../api/client'
-
-interface Message {
-  id: string
-  role: 'user' | 'assistant' | 'system'
-  content: string
-  timestamp: Date
-  memoriesRetrieved?: { id: string; content: string; category_path: string; confidence: number }[]
-  memoriesStored?: { id: string; content: string; category_path: string }[]
-  processingInfo?: { mode: string; model: string; memories_found: number; facts_extracted: number }
-}
+import { useChatStore } from '../store/chatStore'
+import type { Message } from '../store/chatStore'
+import SessionTabs from '../components/SessionTabs'
 
 interface BufferStatus {
   message_count: number
@@ -27,21 +20,36 @@ interface BufferMessage {
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'assistant',
-      content: '안녕하세요! 저는 당신의 대화를 기억하는 AI 어시스턴트입니다. 무엇이든 이야기해주세요. 중요한 정보는 자동으로 기억합니다. 🧠',
-      timestamp: new Date(),
-    },
-  ])
+  // Zustand store
+  const { 
+    sessions, 
+    activeSessionId, 
+    addMessage, 
+    setMode: setSessionMode, 
+    setSelectedMessage: setSessionSelectedMessage,
+    setActiveSession 
+  } = useChatStore()
+  
+  // Initialize active session on first load
+  useEffect(() => {
+    if (!activeSessionId && sessions.length > 0) {
+      setActiveSession(sessions[0].id)
+    }
+  }, [activeSessionId, sessions, setActiveSession])
+  
+  // Get active session
+  const activeSession = sessions.find(s => s.id === activeSessionId)
+  const messages = activeSession?.messages ?? []
+  const mode = activeSession?.mode ?? 'fast'
+  const selectedMessageId = activeSession?.selectedMessageId
+  const selectedMessage = messages.find(m => m.id === selectedMessageId) ?? null
+  
+  // Local UI state
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
-  const [mode, setMode] = useState<'fast' | 'deep'>('fast')
-  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  // Sidebar state
+  // Sidebar state (global, not per-session)
   const [activeTab, setActiveTab] = useState<'memory' | 'buffer'>('memory')
   const [bufferStatus, setBufferStatus] = useState<BufferStatus | null>(null)
   const [bufferMessages, setBufferMessages] = useState<BufferMessage[]>([])
@@ -91,17 +99,25 @@ export default function ChatPage() {
     }
   }
 
+  const setMode = (newMode: 'fast' | 'deep') => {
+    setSessionMode(newMode)
+  }
+
+  const handleSelectMessage = (message: Message | null) => {
+    setSessionSelectedMessage(message?.id ?? null)
+  }
+
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return
+    if (!input.trim() || isLoading || !activeSessionId) return
 
     const userMessage: Message = {
       id: Date.now().toString(),
       role: 'user',
       content: input.trim(),
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
     }
 
-    setMessages(prev => [...prev, userMessage])
+    addMessage(userMessage)
     setInput('')
     setIsLoading(true)
 
@@ -122,17 +138,17 @@ export default function ChatPage() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: result.response,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
         memoriesRetrieved: result.memories_retrieved,
         memoriesStored: result.memories_stored,
         processingInfo: result.processing_info,
       }
 
-      setMessages(prev => [...prev, assistantMessage])
+      addMessage(assistantMessage)
       
       // Auto-select the new message to show context
       if (result.memories_retrieved.length > 0 || result.memories_stored.length > 0) {
-        setSelectedMessage(assistantMessage)
+        handleSelectMessage(assistantMessage)
       }
 
       // Refresh buffer data if on buffer tab
@@ -144,9 +160,9 @@ export default function ChatPage() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: `⚠️ 오류가 발생했습니다: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        timestamp: new Date(),
+        timestamp: new Date().toISOString(),
       }
-      setMessages(prev => [...prev, errorMessage])
+      addMessage(errorMessage)
     } finally {
       setIsLoading(false)
     }
@@ -163,16 +179,22 @@ export default function ChatPage() {
     }
   }
 
+  const formatMessageTimestamp = (ts: string) => {
+    try {
+      return new Date(ts).toLocaleTimeString()
+    } catch {
+      return ''
+    }
+  }
+
   return (
     <div className="flex-1 flex overflow-hidden">
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col">
         {/* Header */}
         <header className="h-16 px-6 flex items-center justify-between border-b border-white/10 bg-[#0f0f18]/80 backdrop-blur-xl">
-          <div>
-            <h2 className="text-lg font-semibold text-white">Memory-Augmented Chat</h2>
-            <p className="text-xs text-gray-500">대화하면서 자동으로 기억합니다</p>
-          </div>
+          {/* Session Tabs */}
+          <SessionTabs />
           
           {/* Mode Toggle */}
           <div className="flex items-center gap-2 bg-white/5 rounded-full p-1">
@@ -214,7 +236,7 @@ export default function ChatPage() {
                     ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white'
                     : 'bg-white/5 text-gray-100 border border-white/10 hover:border-white/20'
                 } ${selectedMessage?.id === message.id ? 'ring-2 ring-purple-500' : ''}`}
-                onClick={() => message.role === 'assistant' && setSelectedMessage(message)}
+                onClick={() => message.role === 'assistant' && handleSelectMessage(message)}
               >
                 <div className="whitespace-pre-wrap break-words">
                   {message.content || ''}
@@ -239,7 +261,7 @@ export default function ChatPage() {
                 ) : null}
                 
                 <div className="text-xs text-gray-500 mt-2">
-                  {message.timestamp.toLocaleTimeString()}
+                  {formatMessageTimestamp(message.timestamp)}
                 </div>
               </div>
             </div>
