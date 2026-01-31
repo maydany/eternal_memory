@@ -90,6 +90,13 @@ async def set_api_key(provider: str, api_key: str):
     Note: For security, the key is stored in environment
     and should be persisted via .env or system keychain.
     """
+    # Security validation: Prevent newline injection in .env
+    if "\n" in api_key or "\r" in api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid API key format: Newlines are not allowed"
+        )
+
     if provider.lower() == "openai":
         os.environ["OPENAI_API_KEY"] = api_key
         
