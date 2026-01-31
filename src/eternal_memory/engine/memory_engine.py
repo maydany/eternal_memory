@@ -176,6 +176,7 @@ class EternalMemorySystem(EternalMemoryEngine):
             repository=self.repository,
             llm_client=self.llm,
             vault=self.vault,
+            llm_config=self.config.llm,  # Enable hierarchical filtering if use_semantic_triples is enabled
         )
         
         self._consolidate_pipeline = ConsolidatePipeline(

@@ -74,6 +74,31 @@ CREATE TABLE IF NOT EXISTS scheduled_tasks (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- 6. Semantic Triples: Entity-Level Memory (LangMem-style)
+CREATE TABLE IF NOT EXISTS semantic_triples (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    memory_item_id UUID REFERENCES memory_items(id) ON DELETE CASCADE,
+    
+    -- Triple components
+    subject TEXT NOT NULL,                      -- "User", "Alice", "Python"
+    predicate TEXT NOT NULL,                    -- "likes", "knows", "is_born_on"
+    object TEXT NOT NULL,                       -- "apples", "coding", "1990-01-01"
+    context TEXT,                               -- Optional: "since 2020", "very much"
+    
+    -- Metadata
+    importance FLOAT DEFAULT 0.5,
+    confidence FLOAT DEFAULT 1.0,
+    is_active BOOLEAN DEFAULT TRUE,
+    superseded_by UUID REFERENCES semantic_triples(id),
+    
+    -- Embeddings for semantic search
+    subject_embedding vector(1536),
+    object_embedding vector(1536),
+    
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_accessed TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_memory_embedding 
     ON memory_items USING hnsw (embedding vector_cosine_ops);
@@ -91,6 +116,22 @@ CREATE INDEX IF NOT EXISTS idx_memory_importance
     ON memory_items(importance DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_last_accessed 
     ON memory_items(last_accessed DESC);
+
+-- Triple-specific indexes
+CREATE INDEX IF NOT EXISTS idx_triple_subject 
+    ON semantic_triples(subject);
+CREATE INDEX IF NOT EXISTS idx_triple_predicate 
+    ON semantic_triples(predicate);
+CREATE INDEX IF NOT EXISTS idx_triple_object_trgm 
+    ON semantic_triples USING gin (object gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_triple_subject_embed 
+    ON semantic_triples USING hnsw (subject_embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_triple_object_embed 
+    ON semantic_triples USING hnsw (object_embedding vector_cosine_ops);
+CREATE INDEX IF NOT EXISTS idx_triple_is_active 
+    ON semantic_triples(is_active);
+CREATE INDEX IF NOT EXISTS idx_triple_memory_item 
+    ON semantic_triples(memory_item_id);
 """
 
 
@@ -140,6 +181,7 @@ class DatabaseSchema:
         Drop all tables. USE WITH CAUTION - this destroys all data.
         """
         drop_sql = """
+        DROP TABLE IF EXISTS semantic_triples CASCADE;
         DROP TABLE IF EXISTS memory_items CASCADE;
         DROP TABLE IF EXISTS categories CASCADE;
         DROP TABLE IF EXISTS resources CASCADE;

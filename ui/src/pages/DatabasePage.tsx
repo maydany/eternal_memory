@@ -29,7 +29,28 @@ interface JobType {
   description: string;
 }
 
-type TabType = 'memories' | 'tasks';
+interface SemanticTriple {
+  id: string;
+  memory_item_id: string | null;
+  subject: string;
+  predicate: string;
+  object: string;
+  context: string | null;
+  importance: number;
+  confidence: number;
+  is_active: boolean;
+  created_at: string;
+  last_accessed: string;
+}
+
+interface TriplesResponse {
+  items: SemanticTriple[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+type TabType = 'memories' | 'tasks' | 'triples';
 
 export default function DatabasePage() {
   const [activeTab, setActiveTab] = useState<TabType>('memories');
@@ -53,6 +74,11 @@ export default function DatabasePage() {
   const [triggeringTask, setTriggeringTask] = useState<string | null>(null);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showScoringModal, setShowScoringModal] = useState(false);
+
+  // Triples tab state
+  const [triples, setTriples] = useState<TriplesResponse | null>(null);
+  const [loadingTriples, setLoadingTriples] = useState(false);
+  const [triplesPage, setTriplesPage] = useState(1);
 
   const fetchData = async () => {
     setLoading(true);
@@ -84,6 +110,20 @@ export default function DatabasePage() {
       console.error('Failed to fetch tasks:', err);
     } finally {
       setLoadingTasks(false);
+    }
+  };
+
+  const fetchTriples = async () => {
+    setLoadingTriples(true);
+    try {
+      const res = await fetch(`http://localhost:8000/api/triples?page=${triplesPage}&page_size=20`);
+      if (!res.ok) throw new Error('Failed to fetch triples');
+      const json = await res.json();
+      setTriples(json);
+    } catch (err) {
+      console.error('Failed to fetch triples:', err);
+    } finally {
+      setLoadingTriples(false);
     }
   };
 
@@ -610,6 +650,17 @@ export default function DatabasePage() {
           <Calendar className="w-4 h-4" />
           <span>Scheduled Tasks</span>
         </button>
+        <button
+          onClick={() => setActiveTab('triples')}
+          className={`flex-1 flex items-center justify-center space-x-2 px-4 py-2 rounded-lg transition-all text-sm font-medium ${
+            activeTab === 'triples'
+              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+              : 'text-zinc-400 hover:text-white hover:bg-white/5'
+          }`}
+        >
+          <Hash className="w-4 h-4" />
+          <span>Semantic Triples</span>
+        </button>
       </div>
 
       {/* Content */}
@@ -734,7 +785,7 @@ export default function DatabasePage() {
               </div>
             </div>
           </>
-        ) : (
+        ) : activeTab === 'tasks' ? (
           <>
             {/* Tasks Table */}
             <div className="overflow-x-auto flex-1">
@@ -847,7 +898,124 @@ export default function DatabasePage() {
               </div>
             </div>
           </>
-        )}
+        ) : activeTab === 'triples' ? (
+          <>
+            {/* Triples Tab */}
+            <div className="p-4 border-b border-white/5 flex items-center justify-between">
+              <div className="flex items-center space-x-3">
+                <span className="text-sm text-zinc-400">Entity-Level Triples (SPO)</span>
+                <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 rounded text-xs font-medium">
+                  LangMem Style
+                </span>
+              </div>
+              <button
+                onClick={fetchTriples}
+                className="flex items-center space-x-2 px-3 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                <RefreshCw className={`w-4 h-4 ${loadingTriples ? 'animate-spin' : ''}`} />
+                <span>Refresh</span>
+              </button>
+            </div>
+
+            <div className="overflow-x-auto flex-1">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-white/5 text-zinc-400 font-medium">
+                  <tr>
+                    <th className="p-4 w-32">Subject</th>
+                    <th className="p-4 w-32">Predicate</th>
+                    <th className="p-4">Object</th>
+                    <th className="p-4 w-24 text-center">Importance</th>
+                    <th className="p-4 w-16 text-center">Active</th>
+                    <th className="p-4 w-36">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {loadingTriples && !triples ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-zinc-500">
+                        Loading triples...
+                      </td>
+                    </tr>
+                  ) : !triples?.items?.length ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-zinc-500">
+                        <div className="flex flex-col items-center space-y-2">
+                          <Hash className="w-8 h-8 text-zinc-600" />
+                          <span>No triples found.</span>
+                          <span className="text-xs">Enable "Entity-Level Triples" in Settings to extract SPO triples.</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    triples.items.map((triple) => (
+                      <tr key={triple.id} className="text-zinc-300 hover:bg-white/5 transition-colors">
+                        <td className="p-4">
+                          <span className="px-2 py-1 rounded text-xs font-medium bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                            {triple.subject}
+                          </span>
+                        </td>
+                        <td className="p-4">
+                          <span className="px-2 py-1 rounded text-xs font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20">
+                            {triple.predicate}
+                          </span>
+                        </td>
+                        <td className="p-4 max-w-lg">
+                          <div className="truncate" title={triple.object}>
+                            {triple.object}
+                          </div>
+                          {triple.context && (
+                            <div className="text-[10px] text-zinc-600 mt-1">
+                              Context: {triple.context}
+                            </div>
+                          )}
+                        </td>
+                        <td className="p-4 text-center">
+                          <span className="text-emerald-400 font-medium">
+                            {(triple.importance * 100).toFixed(0)}%
+                          </span>
+                        </td>
+                        <td className="p-4 text-center">
+                          {triple.is_active ? (
+                            <span className="px-2 py-0.5 rounded text-xs bg-green-500/20 text-green-400">✓</span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded text-xs bg-zinc-700 text-zinc-500">×</span>
+                          )}
+                        </td>
+                        <td className="p-4 text-zinc-500 text-xs">
+                          {new Date(triple.created_at).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Triples Pagination */}
+            <div className="p-4 border-t border-white/5 flex items-center justify-between bg-zinc-900">
+              <span className="text-sm text-zinc-500">
+                {triples?.total || 0} total triples • Page {triplesPage}
+              </span>
+              <div className="flex items-center space-x-2">
+                <button
+                  onClick={() => { setTriplesPage(p => Math.max(1, p - 1)); fetchTriples(); }}
+                  disabled={triplesPage === 1}
+                  className="p-1.5 rounded hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <span className="text-sm text-zinc-400">Page {triplesPage}</span>
+                <button
+                  onClick={() => { setTriplesPage(p => p + 1); fetchTriples(); }}
+                  disabled={!triples || triplesPage * 20 >= triples.total}
+                  className="p-1.5 rounded hover:bg-white/5 disabled:opacity-30 disabled:hover:bg-transparent"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
       </div>
     </div>
   );

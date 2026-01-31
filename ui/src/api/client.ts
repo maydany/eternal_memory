@@ -200,6 +200,9 @@ class ApiClient {
     supersede_model?: string;
     use_llm_importance?: boolean;
     use_memory_supersede?: boolean;
+    use_semantic_triples?: boolean;
+    triple_extraction_immediate?: boolean;
+    triple_extraction_interval_minutes?: number;
   }) {
     const params = new URLSearchParams();
     if (options.model) params.append('model', options.model);
@@ -211,6 +214,15 @@ class ApiClient {
     }
     if (options.use_memory_supersede !== undefined) {
       params.append('use_memory_supersede', options.use_memory_supersede.toString());
+    }
+    if (options.use_semantic_triples !== undefined) {
+      params.append('use_semantic_triples', options.use_semantic_triples.toString());
+    }
+    if (options.triple_extraction_immediate !== undefined) {
+      params.append('triple_extraction_immediate', options.triple_extraction_immediate.toString());
+    }
+    if (options.triple_extraction_interval_minutes !== undefined) {
+      params.append('triple_extraction_interval_minutes', options.triple_extraction_interval_minutes.toString());
     }
     return this.request<{
       success: boolean;
@@ -228,6 +240,9 @@ class ApiClient {
       supersede_model: string;
       use_llm_importance: boolean;
       use_memory_supersede: boolean;
+      use_semantic_triples: boolean;
+      triple_extraction_immediate: boolean;
+      triple_extraction_interval_minutes: number;
       effective_chat_model: string;
       effective_memory_model: string;
       effective_supersede_model: string;

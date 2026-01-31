@@ -216,6 +216,9 @@ export default function SettingsPage() {
   const [supersedeModel, setSupersedeModel] = useState('gpt-4o-mini')
   const [useLLMImportance, setUseLLMImportance] = useState(false)
   const [useMemorySupersede, setUseMemorySupersede] = useState(false)
+  const [useSemanticTriples, setUseSemanticTriples] = useState(false)
+  const [tripleExtractionImmediate, setTripleExtractionImmediate] = useState(true)
+  const [tripleExtractionInterval, setTripleExtractionInterval] = useState(5)
 
   // Buffer settings
   const [bufferSettings, setBufferSettings] = useState<BufferSettings>({ flush_threshold_tokens: 4000, auto_flush_enabled: true })
@@ -268,6 +271,9 @@ export default function SettingsPage() {
       setSupersedeModel(data.supersede_model)
       setUseLLMImportance(data.use_llm_importance)
       setUseMemorySupersede(data.use_memory_supersede)
+      setUseSemanticTriples(data.use_semantic_triples)
+      setTripleExtractionImmediate(data.triple_extraction_immediate)
+      setTripleExtractionInterval(data.triple_extraction_interval_minutes)
       setModel(data.effective_chat_model)
     } catch (error) {
       console.error('Failed to load model config:', error)
@@ -421,6 +427,33 @@ export default function SettingsPage() {
       await api.setModel({ use_memory_supersede: enabled })
     } catch (error) {
       console.error('Failed to save memory supersede setting:', error)
+    }
+  }
+
+  const handleSemanticTriplesToggle = async (enabled: boolean) => {
+    setUseSemanticTriples(enabled)
+    try {
+      await api.setModel({ use_semantic_triples: enabled })
+    } catch (error) {
+      console.error('Failed to save semantic triples setting:', error)
+    }
+  }
+
+  const handleTripleExtractionImmediateToggle = async (enabled: boolean) => {
+    setTripleExtractionImmediate(enabled)
+    try {
+      await api.setModel({ triple_extraction_immediate: enabled })
+    } catch (error) {
+      console.error('Failed to save triple extraction immediate setting:', error)
+    }
+  }
+
+  const handleTripleExtractionIntervalChange = async (interval: number) => {
+    setTripleExtractionInterval(interval)
+    try {
+      await api.setModel({ triple_extraction_interval_minutes: interval })
+    } catch (error) {
+      console.error('Failed to save triple extraction interval:', error)
     }
   }
 
@@ -810,6 +843,75 @@ export default function SettingsPage() {
                     />
                   </button>
                 </div>
+
+                {/* Semantic Triples Toggle */}
+                <div className="flex items-center justify-between pt-3 border-t border-white/10">
+                  <div>
+                    <span className="text-gray-400">Entity-Level Triples</span>
+                    <p className="text-xs text-gray-600">SPO 분해로 정밀 기억 수정 (LangMem 방식)</p>
+                  </div>
+                  <button
+                    onClick={() => handleSemanticTriplesToggle(!useSemanticTriples)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      useSemanticTriples ? 'bg-purple-500' : 'bg-white/10'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        useSemanticTriples ? 'translate-x-6' : ''
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Lazy Evaluation Settings (shown when Semantic Triples enabled) */}
+                {useSemanticTriples && (
+                  <div className="pt-3 pl-4 border-l-2 border-purple-500/30 space-y-3">
+                    {/* Immediate vs Lazy Toggle */}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-gray-400 text-sm">즉시 추출</span>
+                        <p className="text-xs text-gray-600">
+                          {tripleExtractionImmediate 
+                            ? '메모 저장 시 바로 Triple 생성'
+                            : '배치로 지연 처리'}
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => handleTripleExtractionImmediateToggle(!tripleExtractionImmediate)}
+                        className={`relative w-12 h-6 rounded-full transition-colors ${
+                          tripleExtractionImmediate ? 'bg-emerald-500' : 'bg-white/10'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                            tripleExtractionImmediate ? 'translate-x-6' : ''
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* Batch Interval (shown when Lazy mode) */}
+                    {!tripleExtractionImmediate && (
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <span className="text-gray-400 text-sm">배치 주기</span>
+                          <p className="text-xs text-gray-600">Triple 추출 간격</p>
+                        </div>
+                        <select
+                          value={tripleExtractionInterval}
+                          onChange={(e) => handleTripleExtractionIntervalChange(parseInt(e.target.value))}
+                          className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-amber-500"
+                        >
+                          <option value={1}>1분</option>
+                          <option value={5}>5분</option>
+                          <option value={10}>10분</option>
+                          <option value={30}>30분</option>
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <p className="text-xs text-gray-500">

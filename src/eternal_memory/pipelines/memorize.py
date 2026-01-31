@@ -16,6 +16,7 @@ import time
 from eternal_memory.database.repository import MemoryRepository
 from eternal_memory.llm.client import LLMClient
 from eternal_memory.models.memory_item import Category, MemoryItem, MemoryType, Resource
+from eternal_memory.models.semantic_triple import SemanticTriple
 from eternal_memory.vault.markdown_vault import MarkdownVault
 from eternal_memory.pipelines.hooks import PipelineHookManager
 from eternal_memory.config import LLMConfig
@@ -321,7 +322,82 @@ class MemorizePipeline:
                 # Supersede is optional, don't fail the whole operation
                 pass
         
-        # 7. Update timeline
+        # 7. Semantic Triple Extraction (LangMem-style entity updates)
+        if self.llm_config.use_semantic_triples:
+            # Check if immediate extraction is enabled (Lazy Evaluation)
+            if self.llm_config.triple_extraction_immediate:
+                try:
+                    # Extract triples from content immediately
+                    triple_dicts = await self.llm.extract_triples(
+                        text=content,
+                        model_override=self.llm_config.get_memory_model(),
+                    )
+                    
+                    for triple_dict in triple_dicts:
+                        # Create triple object
+                        triple = SemanticTriple(
+                            memory_item_id=item.id,
+                            subject=triple_dict["subject"],
+                            predicate=triple_dict["predicate"],
+                            object=triple_dict["object"],
+                            context=triple_dict.get("context"),
+                            importance=final_importance,
+                        )
+                        
+                        # Find conflicting triples (same subject+predicate or opposite)
+                        conflicts = await self.repository.find_conflicting_triples(
+                            subject=triple.subject,
+                            predicate=triple.predicate,
+                            new_object=triple.object,
+                        )
+                        
+                        # Supersede conflicting triples
+                        for conflict in conflicts:
+                            # Check if truly conflicting
+                            if conflict.object.lower() != triple.object.lower():
+                                # Same subject+predicate but different object
+                                await self.repository.supersede_triple(
+                                    old_triple_id=conflict.id,
+                                    new_triple_id=triple.id,
+                                )
+                                await self.vault.append_to_timeline(
+                                    f"🔀 Triple superseded: ({conflict.subject}, {conflict.predicate}, {conflict.object}) → {triple.object}",
+                                    datetime.now(),
+                                )
+                            elif triple.is_opposite_of(conflict):
+                                # Opposite predicate (likes vs dislikes)
+                                await self.repository.supersede_triple(
+                                    old_triple_id=conflict.id,
+                                    new_triple_id=triple.id,
+                                )
+                                await self.vault.append_to_timeline(
+                                    f"🔀 Contradicting triple: {conflict.predicate} → {triple.predicate}",
+                                    datetime.now(),
+                                )
+                        
+                        # Generate embeddings for the object
+                        object_embedding = await self.llm.generate_embedding(triple.object)
+                        
+                        # Store the new triple
+                        await self.repository.create_triple(
+                            triple=triple,
+                            subject_embedding=None,  # Subject embedding optional
+                            object_embedding=object_embedding,
+                        )
+                    
+                except Exception as e:
+                    # Triple extraction is optional, don't fail
+                    print(f"Triple extraction failed: {e}")
+                    pass
+            else:
+                # Lazy Evaluation: Mark memory for pending triple extraction
+                try:
+                    await self.repository.mark_pending_triple_extraction(item.id)
+                except Exception as e:
+                    print(f"Failed to mark pending triple extraction: {e}")
+                    pass
+        
+        # 8. Update timeline
         if not skip_resource:
             await self.vault.append_to_timeline(
                 f"Stored memory: {content[:100]}...",

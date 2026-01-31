@@ -578,6 +578,98 @@ Reply with ONLY one word: UPDATE, ADD, or UNRELATED"""
         else:
             return "UNRELATED"
 
+    async def extract_triples(
+        self,
+        text: str,
+        model_override: Optional[str] = None,
+    ) -> List[dict]:
+        """
+        Extract semantic triples (Subject-Predicate-Object) from text.
+        
+        Based on LangMem (LangChain, 2024) triple extraction pattern.
+        
+        Args:
+            text: Text to extract triples from
+            model_override: Optional model to use
+            
+        Returns:
+            List of triple dicts with keys: subject, predicate, object, context
+            
+        Example:
+            Input: "John likes apples and bananas"
+            Output: [
+                {"subject": "John", "predicate": "likes", "object": "apples", "context": null},
+                {"subject": "John", "predicate": "likes", "object": "bananas", "context": null}
+            ]
+        """
+        prompt = f"""Extract semantic triples from the following text.
+Each triple should be (Subject, Predicate, Object) format.
+
+RULES:
+1. Subject: The entity performing or being described (e.g., "User", "John", "Python")
+2. Predicate: The relationship or action in snake_case (e.g., "likes", "knows", "is_born_on")
+3. Object: The target entity or value (e.g., "apples", "coding", "1990-01-01")
+4. Context: Optional additional context (e.g., "since 2020", "very much")
+5. DECOMPOSE compound statements into separate triples
+6. Use "User" as subject when referring to the speaker/owner of the information
+
+EXAMPLES:
+- "I like apples and bananas" → 
+  [{{"subject": "User", "predicate": "likes", "object": "apples"}},
+   {{"subject": "User", "predicate": "likes", "object": "bananas"}}]
+   
+- "My name is John and I was born in 1990" →
+  [{{"subject": "User", "predicate": "is_named", "object": "John"}},
+   {{"subject": "User", "predicate": "born_in", "object": "1990"}}]
+
+- "Python is a programming language that I love" →
+  [{{"subject": "Python", "predicate": "is", "object": "programming language"}},
+   {{"subject": "User", "predicate": "loves", "object": "Python"}}]
+
+TEXT TO ANALYZE:
+"{text}"
+
+Respond with ONLY a valid JSON array of triples. No explanation."""
+
+        model = model_override or self.model
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,  # Deterministic
+                max_tokens=500,
+            )
+            await self._report_usage(response)
+            
+            result = response.choices[0].message.content.strip()
+            
+            # Parse JSON response
+            # Handle potential markdown code blocks
+            if result.startswith("```"):
+                result = result.split("```")[1]
+                if result.startswith("json"):
+                    result = result[4:]
+            
+            triples = json.loads(result)
+            
+            # Validate and normalize
+            normalized = []
+            for t in triples:
+                if all(k in t for k in ["subject", "predicate", "object"]):
+                    normalized.append({
+                        "subject": str(t["subject"]).strip(),
+                        "predicate": str(t["predicate"]).lower().strip().replace(" ", "_"),
+                        "object": str(t["object"]).strip(),
+                        "context": t.get("context"),
+                    })
+            
+            return normalized
+            
+        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            # Fallback: return empty if parsing fails
+            print(f"Triple extraction failed: {e}")
+            return []
 
 
     async def complete(

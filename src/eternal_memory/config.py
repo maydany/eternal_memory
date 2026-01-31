@@ -98,6 +98,11 @@ class LLMConfig(BaseModel):
     # Feature toggles
     use_llm_importance: bool = False  # Whether to use LLM for importance rating
     use_memory_supersede: bool = False  # Whether to detect and supersede contradicting memories
+    use_semantic_triples: bool = False  # Whether to extract entity-level triples for precise updates
+    
+    # Lazy Evaluation for triple extraction
+    triple_extraction_immediate: bool = True  # True = extract on memorize, False = batch process later
+    triple_extraction_interval_minutes: int = 5  # Interval for batch extraction when immediate=False (1, 5, 10, 30)
     
     def get_chat_model(self) -> str:
         """Get the model to use for chat/reasoning."""

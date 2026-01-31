@@ -285,6 +285,9 @@ async def set_model(
     supersede_model: Optional[str] = None,
     use_llm_importance: Optional[bool] = None,
     use_memory_supersede: Optional[bool] = None,
+    use_semantic_triples: Optional[bool] = None,
+    triple_extraction_immediate: Optional[bool] = None,
+    triple_extraction_interval_minutes: Optional[int] = None,
 ):
     """
     Set the selected model(s) for the LLM provider.
@@ -296,6 +299,9 @@ async def set_model(
         supersede_model: Model for contradiction detection (MemGPT-style)
         use_llm_importance: Whether to use LLM for importance rating
         use_memory_supersede: Whether to detect and supersede contradicting memories
+        use_semantic_triples: Whether to extract entity-level triples for precise updates
+        triple_extraction_immediate: True = extract triples immediately, False = lazy batch
+        triple_extraction_interval_minutes: Interval for batch extraction (1, 5, 10, 30)
     """
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     
@@ -328,6 +334,22 @@ async def set_model(
     if use_memory_supersede is not None:
         config["llm"]["use_memory_supersede"] = use_memory_supersede
     
+    if use_semantic_triples is not None:
+        config["llm"]["use_semantic_triples"] = use_semantic_triples
+    
+    if triple_extraction_immediate is not None:
+        config["llm"]["triple_extraction_immediate"] = triple_extraction_immediate
+    
+    if triple_extraction_interval_minutes is not None:
+        # Validate allowed values
+        allowed_intervals = [1, 5, 10, 30]
+        if triple_extraction_interval_minutes not in allowed_intervals:
+            raise HTTPException(
+                status_code=400,
+                detail=f"triple_extraction_interval_minutes must be one of {allowed_intervals}"
+            )
+        config["llm"]["triple_extraction_interval_minutes"] = triple_extraction_interval_minutes
+    
     # Save
     async with aiofiles.open(CONFIG_PATH, "w") as f:
         await f.write(yaml.dump(config, allow_unicode=True))
@@ -351,6 +373,9 @@ async def get_model_config():
         "supersede_model": "gpt-4o-mini",
         "use_llm_importance": False,
         "use_memory_supersede": False,
+        "use_semantic_triples": False,
+        "triple_extraction_immediate": True,
+        "triple_extraction_interval_minutes": 5,
     }
     
     if CONFIG_PATH.exists():
@@ -365,6 +390,9 @@ async def get_model_config():
                 settings["supersede_model"] = config["llm"].get("supersede_model", "gpt-4o-mini")
                 settings["use_llm_importance"] = config["llm"].get("use_llm_importance", False)
                 settings["use_memory_supersede"] = config["llm"].get("use_memory_supersede", False)
+                settings["use_semantic_triples"] = config["llm"].get("use_semantic_triples", False)
+                settings["triple_extraction_immediate"] = config["llm"].get("triple_extraction_immediate", True)
+                settings["triple_extraction_interval_minutes"] = config["llm"].get("triple_extraction_interval_minutes", 5)
         except Exception:
             pass
     

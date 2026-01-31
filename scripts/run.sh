@@ -87,6 +87,7 @@ echo -e "${CYAN}🎨 Starting Frontend...${NC}"
 cd ui
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+nvm use default 2>/dev/null || nvm use node 2>/dev/null || true
 npm run dev &
 PID_FRONTEND=$!
 

@@ -13,6 +13,7 @@ from uuid import UUID
 import asyncpg
 
 from eternal_memory.models.memory_item import Category, MemoryItem, MemoryType, Resource
+from eternal_memory.models.semantic_triple import SemanticTriple, normalize_predicate
 
 
 class MemoryRepository:
@@ -991,3 +992,425 @@ class MemoryRepository:
         except Exception as e:
             print(f"DB Optimization warning: {e}")
 
+    # =========================================================================
+    # SEMANTIC TRIPLES (Entity-Level Memory)
+    # =========================================================================
+
+    async def create_triple(
+        self,
+        triple: SemanticTriple,
+        subject_embedding: Optional[List[float]] = None,
+        object_embedding: Optional[List[float]] = None,
+    ) -> SemanticTriple:
+        """
+        Create a new semantic triple.
+        
+        Args:
+            triple: SemanticTriple object to store
+            subject_embedding: Optional embedding for subject
+            object_embedding: Optional embedding for object
+            
+        Returns:
+            Created SemanticTriple with assigned ID
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO semantic_triples 
+                (id, memory_item_id, subject, predicate, object, context,
+                 importance, confidence, is_active, subject_embedding, object_embedding,
+                 created_at, last_accessed)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                """,
+                triple.id,
+                triple.memory_item_id,
+                triple.subject,
+                normalize_predicate(triple.predicate),
+                triple.object,
+                triple.context,
+                triple.importance,
+                triple.confidence,
+                triple.is_active,
+                str(subject_embedding) if subject_embedding else None,
+                str(object_embedding) if object_embedding else None,
+                triple.created_at,
+                triple.last_accessed,
+            )
+        return triple
+
+    async def search_triples_by_entity(
+        self,
+        entity: str,
+        search_subject: bool = True,
+        search_object: bool = True,
+        active_only: bool = True,
+        limit: int = 20,
+    ) -> List[SemanticTriple]:
+        """
+        Search triples by subject or object entity name.
+        
+        Args:
+            entity: Entity name to search for
+            search_subject: Include subject matches
+            search_object: Include object matches
+            active_only: Only return active triples
+            limit: Maximum results
+            
+        Returns:
+            List of matching SemanticTriples
+        """
+        conditions = []
+        if search_subject:
+            conditions.append("LOWER(subject) = LOWER($1)")
+        if search_object:
+            conditions.append("LOWER(object) = LOWER($1)")
+        
+        where_entity = " OR ".join(conditions) if conditions else "FALSE"
+        where_active = "AND is_active = TRUE" if active_only else ""
+        
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM semantic_triples
+                WHERE ({where_entity}) {where_active}
+                ORDER BY importance DESC, last_accessed DESC
+                LIMIT $2
+                """,
+                entity,
+                limit,
+            )
+            
+            return [self._row_to_triple(row) for row in rows]
+
+    async def search_triples_semantic(
+        self,
+        query_embedding: List[float],
+        limit: int = 10,
+        threshold: float = 0.5,
+        active_only: bool = True,
+    ) -> List[SemanticTriple]:
+        """
+        Search triples by semantic similarity on object embedding.
+        
+        Args:
+            query_embedding: Query vector
+            limit: Maximum results
+            threshold: Minimum similarity threshold
+            active_only: Only return active triples
+            
+        Returns:
+            List of semantically similar triples
+        """
+        where_active = "AND is_active = TRUE" if active_only else ""
+        
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT *,
+                       1 - (object_embedding <=> $1::vector) as similarity
+                FROM semantic_triples
+                WHERE object_embedding IS NOT NULL
+                  AND 1 - (object_embedding <=> $1::vector) >= $2
+                  {where_active}
+                ORDER BY similarity DESC
+                LIMIT $3
+                """,
+                str(query_embedding),
+                threshold,
+                limit,
+            )
+            
+            return [self._row_to_triple(row) for row in rows]
+
+    async def find_conflicting_triples(
+        self,
+        subject: str,
+        predicate: str,
+        new_object: Optional[str] = None,
+        active_only: bool = True,
+    ) -> List[SemanticTriple]:
+        """
+        Find triples that might conflict with a new triple.
+        
+        Conflict cases:
+        1. Same subject + predicate, different object (for exclusive predicates)
+        2. Same subject + object, opposite predicate (likes vs dislikes)
+        
+        Args:
+            subject: Subject to match
+            predicate: Predicate to match or find opposites
+            new_object: Optional object for opposite predicate check
+            active_only: Only check active triples
+            
+        Returns:
+            List of potentially conflicting triples
+        """
+        normalized_pred = normalize_predicate(predicate)
+        where_active = "AND is_active = TRUE" if active_only else ""
+        
+        # Opposite predicate pairs
+        opposite_map = {
+            "likes": "dislikes",
+            "dislikes": "likes",
+            "loves": "hates",
+            "hates": "loves",
+            "wants": "avoids",
+            "avoids": "wants",
+            "is": "is_not",
+            "is_not": "is",
+            "can": "cannot",
+            "cannot": "can",
+        }
+        
+        opposite_pred = opposite_map.get(normalized_pred)
+        
+        async with self._pool.acquire() as conn:
+            # Case 1: Same subject + predicate (different object will be filtered by caller)
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM semantic_triples
+                WHERE LOWER(subject) = LOWER($1)
+                  AND predicate = $2
+                  {where_active}
+                """,
+                subject,
+                normalized_pred,
+            )
+            
+            results = [self._row_to_triple(row) for row in rows]
+            
+            # Case 2: Opposite predicate with same object
+            if opposite_pred and new_object:
+                opposite_rows = await conn.fetch(
+                    f"""
+                    SELECT * FROM semantic_triples
+                    WHERE LOWER(subject) = LOWER($1)
+                      AND predicate = $2
+                      AND LOWER(object) = LOWER($3)
+                      {where_active}
+                    """,
+                    subject,
+                    opposite_pred,
+                    new_object,
+                )
+                results.extend([self._row_to_triple(row) for row in opposite_rows])
+            
+            return results
+
+    async def supersede_triple(
+        self,
+        old_triple_id: UUID,
+        new_triple_id: UUID,
+    ) -> bool:
+        """
+        Mark an old triple as superseded by a new one.
+        
+        Args:
+            old_triple_id: Triple to mark as inactive
+            new_triple_id: The new triple that replaces it
+            
+        Returns:
+            True if supersede was successful
+        """
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                """
+                UPDATE semantic_triples
+                SET is_active = FALSE,
+                    superseded_by = $2,
+                    last_accessed = NOW()
+                WHERE id = $1
+                """,
+                old_triple_id,
+                new_triple_id,
+            )
+            return result == "UPDATE 1"
+
+    async def get_triples_for_memory_item(
+        self,
+        memory_item_id: UUID,
+        active_only: bool = False,
+    ) -> List[SemanticTriple]:
+        """
+        Get all triples associated with a memory item.
+        
+        Args:
+            memory_item_id: The memory item ID
+            active_only: Only return active triples
+            
+        Returns:
+            List of associated triples
+        """
+        where_active = "AND is_active = TRUE" if active_only else ""
+        
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM semantic_triples
+                WHERE memory_item_id = $1 {where_active}
+                ORDER BY created_at
+                """,
+                memory_item_id,
+            )
+            
+            return [self._row_to_triple(row) for row in rows]
+
+    async def list_triples(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        active_only: bool = False,
+    ) -> List[SemanticTriple]:
+        """
+        List triples with pagination.
+        
+        Args:
+            limit: Maximum results
+            offset: Pagination offset
+            active_only: Only return active triples
+            
+        Returns:
+            List of triples
+        """
+        where_active = "WHERE is_active = TRUE" if active_only else ""
+        
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT * FROM semantic_triples
+                {where_active}
+                ORDER BY created_at DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit,
+                offset,
+            )
+            
+            return [self._row_to_triple(row) for row in rows]
+
+    async def count_triples(self, active_only: bool = False) -> int:
+        """Count total triples."""
+        where_active = "WHERE is_active = TRUE" if active_only else ""
+        
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval(
+                f"SELECT COUNT(*) FROM semantic_triples {where_active}"
+            )
+
+    def _row_to_triple(self, row) -> SemanticTriple:
+        """Convert database row to SemanticTriple object."""
+        return SemanticTriple(
+            id=row["id"],
+            memory_item_id=row["memory_item_id"],
+            subject=row["subject"],
+            predicate=row["predicate"],
+            object=row["object"],
+            context=row["context"],
+            importance=row["importance"],
+            confidence=row["confidence"],
+            is_active=row["is_active"],
+            created_at=row["created_at"],
+            last_accessed=row["last_accessed"],
+        )
+
+    # =============================================================================
+    # Lazy Triple Extraction (pending processing)
+    # =============================================================================
+    
+    async def mark_pending_triple_extraction(self, item_id: UUID) -> None:
+        """
+        Mark a memory item as pending triple extraction.
+        
+        Uses a simple approach: store in metadata JSON.
+        This avoids schema changes while still tracking pending status.
+        """
+        async with self._pool.acquire() as conn:
+            # Store pending status in resources.metadata
+            # We look up the resource_id from the memory item
+            row = await conn.fetchrow(
+                "SELECT resource_id FROM memory_items WHERE id = $1",
+                item_id
+            )
+            
+            if row and row["resource_id"]:
+                await conn.execute(
+                    """
+                    UPDATE resources 
+                    SET metadata = COALESCE(metadata, '{}')::jsonb || '{"pending_triple_extraction": true}'::jsonb
+                    WHERE id = $1
+                    """,
+                    row["resource_id"]
+                )
+
+    async def get_pending_triple_items(self, limit: int = 50) -> List[MemoryItem]:
+        """
+        Get memory items that need triple extraction (Lazy Evaluation).
+        
+        Returns items where:
+        1. The associated resource has pending_triple_extraction = true
+        2. The item has no triples yet
+        
+        Returns:
+            List of MemoryItems needing triple extraction
+        """
+        async with self._pool.acquire() as conn:
+            # Find items with pending flag or no triples yet
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT mi.*, c.path as category_path
+                FROM memory_items mi
+                LEFT JOIN categories c ON mi.category_id = c.id
+                LEFT JOIN resources r ON mi.resource_id = r.id
+                LEFT JOIN semantic_triples st ON st.memory_item_id = mi.id
+                WHERE mi.is_active = TRUE
+                AND (
+                    -- Has explicit pending flag
+                    (r.metadata->>'pending_triple_extraction')::boolean = true
+                    OR
+                    -- Has no triples yet (implicit pending)
+                    st.id IS NULL
+                )
+                ORDER BY mi.created_at DESC
+                LIMIT $1
+                """,
+                limit
+            )
+            
+            return [self._row_to_memory_item(row) for row in rows]
+
+    async def clear_pending_triple_flag(self, item_id: UUID) -> None:
+        """
+        Clear the pending triple extraction flag after successful extraction.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT resource_id FROM memory_items WHERE id = $1",
+                item_id
+            )
+            
+            if row and row["resource_id"]:
+                await conn.execute(
+                    """
+                    UPDATE resources 
+                    SET metadata = metadata - 'pending_triple_extraction'
+                    WHERE id = $1
+                    """,
+                    row["resource_id"]
+                )
+
+    async def count_pending_triple_items(self) -> int:
+        """Count memory items pending triple extraction."""
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval(
+                """
+                SELECT COUNT(DISTINCT mi.id)
+                FROM memory_items mi
+                LEFT JOIN resources r ON mi.resource_id = r.id
+                LEFT JOIN semantic_triples st ON st.memory_item_id = mi.id
+                WHERE mi.is_active = TRUE
+                AND (
+                    (r.metadata->>'pending_triple_extraction')::boolean = true
+                    OR st.id IS NULL
+                )
+                """
+            )

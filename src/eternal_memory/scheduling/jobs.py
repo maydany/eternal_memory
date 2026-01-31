@@ -460,6 +460,110 @@ async def job_embedding_refresh(system: "EternalMemorySystem"):
         logger.error(f"Embedding Refresh failed: {e}")
 
 
+@register_job("lazy_triple_extraction")
+async def job_lazy_triple_extraction(system: "EternalMemorySystem"):
+    """
+    Lazy Triple Extraction Job.
+    
+    Processes memory items that are pending triple extraction.
+    This enables "Lazy Evaluation" - deferring expensive LLM calls for triple
+    extraction until a batch job runs, instead of during memorization.
+    
+    Benefits:
+    - Faster memorization (no blocking on triple extraction)
+    - Batched LLM calls for cost efficiency
+    - Configurable interval (1, 5, 10, 30 minutes)
+    """
+    logger.info("🔄 Executing Lazy Triple Extraction...")
+    
+    try:
+        # Import here to avoid circular imports
+        from eternal_memory.models.semantic_triple import SemanticTriple
+        
+        # 1. Check if semantic triples are enabled
+        if not system.config.llm.use_semantic_triples:
+            logger.info("Semantic triples disabled, skipping.")
+            return
+        
+        # 2. Skip if immediate extraction is enabled (not lazy mode)
+        if system.config.llm.triple_extraction_immediate:
+            logger.info("Immediate extraction mode, skipping lazy job.")
+            return
+        
+        # 3. Get pending items
+        pending_items = await system.repository.get_pending_triple_items(limit=20)
+        
+        if not pending_items:
+            logger.info("No pending items for triple extraction.")
+            return
+        
+        logger.info(f"Processing {len(pending_items)} items for triple extraction...")
+        
+        extracted_count = 0
+        
+        for item in pending_items:
+            try:
+                # Extract triples from content
+                triple_dicts = await system.llm.extract_triples(
+                    text=item.content,
+                    model_override=system.config.llm.get_memory_model(),
+                )
+                
+                for triple_dict in triple_dicts:
+                    # Create triple object
+                    triple = SemanticTriple(
+                        memory_item_id=item.id,
+                        subject=triple_dict["subject"],
+                        predicate=triple_dict["predicate"],
+                        object=triple_dict["object"],
+                        context=triple_dict.get("context"),
+                        importance=item.importance,
+                    )
+                    
+                    # Find conflicting triples
+                    conflicts = await system.repository.find_conflicting_triples(
+                        subject=triple.subject,
+                        predicate=triple.predicate,
+                        new_object=triple.object,
+                    )
+                    
+                    # Supersede conflicting triples
+                    for conflict in conflicts:
+                        if conflict.object.lower() != triple.object.lower():
+                            await system.repository.supersede_triple(
+                                old_triple_id=conflict.id,
+                                new_triple_id=triple.id,
+                            )
+                        elif triple.is_opposite_of(conflict):
+                            await system.repository.supersede_triple(
+                                old_triple_id=conflict.id,
+                                new_triple_id=triple.id,
+                            )
+                    
+                    # Generate object embedding
+                    object_embedding = await system.llm.generate_embedding(triple.object)
+                    
+                    # Store the triple
+                    await system.repository.create_triple(
+                        triple=triple,
+                        subject_embedding=None,
+                        object_embedding=object_embedding,
+                    )
+                
+                # Clear the pending flag
+                await system.repository.clear_pending_triple_flag(item.id)
+                extracted_count += 1
+                
+            except Exception as e:
+                logger.error(f"Triple extraction failed for item {item.id}: {e}")
+                continue
+        
+        logger.info(f"✅ Lazy Triple Extraction complete: processed {extracted_count}/{len(pending_items)} items")
+        
+    except Exception as e:
+        logger.error(f"Lazy Triple Extraction job failed: {e}")
+
+
 def get_job_types() -> list:
     """Get list of available job types."""
     return list(JOB_REGISTRY.keys())
