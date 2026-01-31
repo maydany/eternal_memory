@@ -191,6 +191,91 @@ class ApiClient {
       { method: 'PUT' }
     );
   }
+
+  // Schedule endpoints
+  async getScheduledJobs() {
+    return this.request<ScheduledTask[]>('/schedule/jobs');
+  }
+
+  async addScheduledJob(name: string, jobType: string, intervalSeconds: number) {
+    return this.request<ScheduledTask>('/schedule/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        job_type: jobType,
+        interval_seconds: intervalSeconds,
+      }),
+    });
+  }
+
+  async deleteScheduledJob(name: string) {
+    return this.request<{ success: boolean; message: string }>(
+      `/schedule/jobs/${encodeURIComponent(name)}`,
+      { method: 'DELETE' }
+    );
+  }
+
+  async triggerScheduledJob(name: string) {
+    return this.request<{ success: boolean; message: string }>(
+      `/schedule/jobs/${encodeURIComponent(name)}/trigger`,
+      { method: 'POST' }
+    );
+  }
+
+  async getJobTypes() {
+    return this.request<{
+      job_types: { type: string; description: string }[];
+    }>('/schedule/job-types');
+  }
+
+  // Timeline endpoints
+  async getTimeline(type?: string, days: number = 30) {
+    const params = new URLSearchParams();
+    if (type) params.append('type', type);
+    params.append('days', days.toString());
+    return this.request<TimelineResponse>(`/timeline/?${params.toString()}`);
+  }
+
+  async getTimelineStats() {
+    return this.request<TimelineStats>('/timeline/stats');
+  }
+}
+
+export interface ScheduledTask {
+  id?: string;
+  name: string;
+  job_type: string;
+  interval_seconds: number;
+  enabled: boolean;
+  is_system: boolean;
+  last_run?: string | null;
+  next_run?: string | null;
+  next_run_in?: number | null;
+  running?: boolean;
+  created_at?: string | null;
+}
+
+export interface TimelineEntry {
+  id: string;
+  type: string;  // daily_reflection, weekly_summary, monthly_summary
+  content: string;
+  date_label: string;
+  created_at: string;
+  memory_count?: number;
+}
+
+export interface TimelineResponse {
+  entries: TimelineEntry[];
+  total: number;
+}
+
+export interface TimelineStats {
+  daily_count_30d: number;
+  weekly_count_90d: number;
+  monthly_count_365d: number;
+  latest_daily: string | null;
+  latest_weekly: string | null;
+  latest_monthly: string | null;
 }
 
 export const api = new ApiClient();

@@ -201,20 +201,21 @@ class MemoryRepository:
                 await conn.execute(
                     """
                     INSERT INTO memory_items 
-                    (id, category_id, resource_id, content, embedding, type, importance, confidence, created_at, last_accessed)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    (id, category_id, resource_id, content, embedding, type, importance, confidence, mention_count, created_at, last_accessed)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                     """,
                     item.id,
-                category_id,
-                item.source_resource_id,
-                item.content,
-                str(embedding),  # pgvector accepts string format
-                item.type,
-                item.importance,
-                item.confidence,
-                item.created_at,
-                item.last_accessed,
-            )
+                    category_id,
+                    item.source_resource_id,
+                    item.content,
+                    str(embedding),  # pgvector accepts string format
+                    item.type,
+                    item.importance,
+                    item.confidence,
+                    item.mention_count,
+                    item.created_at,
+                    item.last_accessed,
+                )
         except Exception as e:
             print(f"DEBUG ERROR: Failed to insert memory item: {e}", flush=True)
             raise e
@@ -240,6 +241,7 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"],
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -253,6 +255,26 @@ class MemoryRepository:
                 "UPDATE memory_items SET last_accessed = NOW() WHERE id = $1",
                 item_id,
             )
+
+    async def reinforce_memory_item(self, item_id: UUID, new_importance: float) -> int:
+        """
+        Reinforce a memory item by incrementing mention_count and updating importance.
+        Returns the new mention_count.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE memory_items 
+                SET last_accessed = NOW(),
+                    mention_count = mention_count + 1,
+                    importance = $2
+                WHERE id = $1
+                RETURNING mention_count
+                """,
+                item_id,
+                new_importance,
+            )
+            return row["mention_count"] if row else 0
     
     # ========== Search Operations ==========
     
@@ -292,6 +314,7 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"] * row["similarity"],  # Adjust by similarity
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -365,6 +388,7 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"], # Score is separate
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -405,6 +429,7 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"],
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -441,6 +466,7 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"],
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -460,9 +486,9 @@ class MemoryRepository:
                 SELECT mi.*, c.path as category_path
                 FROM memory_items mi
                 LEFT JOIN categories c ON mi.category_id = c.id
-                WHERE mi.last_accessed < NOW() - INTERVAL '%s days'
+                WHERE mi.last_accessed < NOW() - (INTERVAL '1 day' * $1)
                 ORDER BY mi.importance ASC, mi.last_accessed ASC
-                LIMIT $1
+                LIMIT $2
                 """,
                 days_threshold,
                 limit,
@@ -476,6 +502,7 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"],
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -513,6 +540,103 @@ class MemoryRepository:
                     type=MemoryType(row["type"]),
                     confidence=row["confidence"],
                     importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
+                    source_resource_id=row["resource_id"],
+                    created_at=row["created_at"],
+                    last_accessed=row["last_accessed"],
+                )
+                for row in rows
+            ]
+
+    async def get_memories_since(
+        self,
+        since: datetime,
+        limit: int = 100,
+    ) -> List[MemoryItem]:
+        """
+        Fetch memory items created after the given datetime.
+        
+        Used by Daily Reflection to get recent memories for summarization.
+        
+        Args:
+            since: Datetime threshold (exclusive)
+            limit: Maximum number of items to return
+            
+        Returns:
+            List of MemoryItems created after `since`, ordered by creation time
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT mi.*, c.path as category_path
+                FROM memory_items mi
+                LEFT JOIN categories c ON mi.category_id = c.id
+                WHERE mi.created_at > $1
+                ORDER BY mi.created_at ASC
+                LIMIT $2
+                """,
+                since,
+                limit,
+            )
+            
+            return [
+                MemoryItem(
+                    id=row["id"],
+                    content=row["content"],
+                    category_path=row["category_path"] or "",
+                    type=MemoryType(row["type"]),
+                    confidence=row["confidence"],
+                    importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
+                    source_resource_id=row["resource_id"],
+                    created_at=row["created_at"],
+                    last_accessed=row["last_accessed"],
+                )
+                for row in rows
+            ]
+
+    async def get_reflections_by_type(
+        self,
+        reflection_type: str,
+        since: datetime,
+        limit: int = 50,
+    ) -> List[MemoryItem]:
+        """
+        Get reflection/summary memories by category path prefix.
+        
+        Args:
+            reflection_type: Type prefix like 'timeline/daily', 'timeline/weekly'
+            since: Only get reflections created after this date
+            limit: Maximum number of items
+            
+        Returns:
+            List of MemoryItems matching the category prefix
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT mi.*, c.path as category_path
+                FROM memory_items mi
+                LEFT JOIN categories c ON mi.category_id = c.id
+                WHERE c.path LIKE $1 || '%'
+                  AND mi.created_at > $2
+                ORDER BY mi.created_at DESC
+                LIMIT $3
+                """,
+                reflection_type,
+                since,
+                limit,
+            )
+            
+            return [
+                MemoryItem(
+                    id=row["id"],
+                    content=row["content"],
+                    category_path=row["category_path"] or "",
+                    type=MemoryType(row["type"]),
+                    confidence=row["confidence"],
+                    importance=row["importance"],
+                    mention_count=row.get("mention_count", 1),
                     source_resource_id=row["resource_id"],
                     created_at=row["created_at"],
                     last_accessed=row["last_accessed"],
@@ -588,3 +712,155 @@ class MemoryRepository:
                 completion_tokens,
                 total_tokens,
             )
+
+    # ========== Scheduled Task Operations ==========
+
+    async def get_scheduled_tasks(self) -> List[dict]:
+        """Get all scheduled tasks from the database."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT id, name, job_type, interval_seconds, enabled, is_system, 
+                       last_run, next_run, created_at
+                FROM scheduled_tasks
+                ORDER BY is_system DESC, name
+                """
+            )
+            return [
+                {
+                    "id": str(row["id"]),
+                    "name": row["name"],
+                    "job_type": row["job_type"],
+                    "interval_seconds": row["interval_seconds"],
+                    "enabled": row["enabled"],
+                    "is_system": row["is_system"],
+                    "last_run": row["last_run"].isoformat() if row["last_run"] else None,
+                    "next_run": row["next_run"].isoformat() if row["next_run"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+                for row in rows
+            ]
+
+    async def save_scheduled_task(
+        self,
+        name: str,
+        job_type: str,
+        interval_seconds: int,
+        enabled: bool = True,
+        is_system: bool = False,
+    ) -> dict:
+        """Save a scheduled task to the database."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO scheduled_tasks (name, job_type, interval_seconds, enabled, is_system)
+                VALUES ($1, $2, $3, $4, $5)
+                ON CONFLICT (name) DO UPDATE SET
+                    job_type = EXCLUDED.job_type,
+                    interval_seconds = EXCLUDED.interval_seconds,
+                    enabled = EXCLUDED.enabled
+                RETURNING id, name, job_type, interval_seconds, enabled, is_system, 
+                          last_run, next_run, created_at
+                """,
+                name,
+                job_type,
+                interval_seconds,
+                enabled,
+                is_system,
+            )
+            return {
+                "id": str(row["id"]),
+                "name": row["name"],
+                "job_type": row["job_type"],
+                "interval_seconds": row["interval_seconds"],
+                "enabled": row["enabled"],
+                "is_system": row["is_system"],
+                "last_run": row["last_run"].isoformat() if row["last_run"] else None,
+                "next_run": row["next_run"].isoformat() if row["next_run"] else None,
+                "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+            }
+
+    async def delete_scheduled_task(self, name: str) -> bool:
+        """Delete a scheduled task by name. Returns True if deleted."""
+        async with self._pool.acquire() as conn:
+            # Don't allow deleting system tasks
+            result = await conn.execute(
+                """
+                DELETE FROM scheduled_tasks 
+                WHERE name = $1 AND is_system = false
+                """,
+                name,
+            )
+            return result == "DELETE 1"
+
+    async def update_task_last_run(self, name: str, last_run: datetime = None) -> None:
+        """Update the last_run timestamp for a task."""
+        if last_run is None:
+            last_run = datetime.now()
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE scheduled_tasks 
+                SET last_run = $1, next_run = $1 + (interval_seconds * INTERVAL '1 second')
+                WHERE name = $2
+                """,
+                last_run,
+                name,
+            )
+
+    async def get_scheduled_task(self, name: str) -> Optional[dict]:
+        """Get a scheduled task by name."""
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, name, job_type, interval_seconds, enabled, is_system, 
+                       last_run, next_run, created_at
+                FROM scheduled_tasks
+                WHERE name = $1
+                """,
+                name,
+            )
+            if row:
+                return {
+                    "id": str(row["id"]),
+                    "name": row["name"],
+                    "job_type": row["job_type"],
+                    "interval_seconds": row["interval_seconds"],
+                    "enabled": row["enabled"],
+                    "is_system": row["is_system"],
+                    "last_run": row["last_run"].isoformat() if row["last_run"] else None,
+                    "next_run": row["next_run"].isoformat() if row["next_run"] else None,
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                }
+            return None
+
+    # ========== Maintenance ==========
+    
+    async def optimize_database(self) -> None:
+        """
+        Run PostgreSQL maintenance tasks.
+        
+        Executes:
+        - VACUUM: Reclaims storage occupied by dead tuples.
+        - ANALYZE: Updates statistics used by the query planner.
+        
+        Note: VACUUM cannot be run inside a transaction block, 
+        so we need to use isolation_level='autocommit' or similar.
+        Asyncpg connection usually handles this if not in a transaction.
+        """
+        # We need a separate connection for VACUUM as it cannot run inside a transaction block
+        # acquiring a connection from pool *might* be in implicit transaction depending on config,
+        # but usually it's fine. However, asyncpg execute() wraps in prepared statement often.
+        # Simplest way is to just run it.
+        
+        try:
+            # Manually connect to ensure no transaction wrapping
+            conn = await asyncpg.connect(self.connection_string)
+            try:
+                # VACUUM cannot run in a transaction block
+                await conn.execute("VACUUM ANALYZE")
+            finally:
+                await conn.close()
+        except Exception as e:
+            print(f"DB Optimization warning: {e}")
+

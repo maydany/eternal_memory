@@ -70,7 +70,7 @@ def load_config(config_path: Optional[Path] = None) -> MemoryConfig:
     Falls back to environment variables and defaults.
     """
     if config_path is None:
-        config_path = Path.home() / ".openclaw" / "config" / "memory_config.yaml"
+        config_path = Path.cwd() / "user-memory" / "config" / "memory_config.yaml"
     
     config_data = {}
     

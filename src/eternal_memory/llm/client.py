@@ -326,3 +326,197 @@ Category path:"""
         )
         await self._report_usage(response)
         return response.choices[0].message.content
+
+    async def generate_daily_reflection(
+        self,
+        memory_items: List[str],
+        date_str: str,
+    ) -> dict:
+        """
+        Generate a structured daily reflection from the day's memories.
+        
+        Args:
+            memory_items: List of memory content strings from the past 24 hours
+            date_str: Date string for the reflection (e.g., "2026-01-31")
+            
+        Returns:
+            Dictionary with keys: summary, key_events, sentiment, insights
+        """
+        items_text = "\n".join([f"- {item}" for item in memory_items])
+        
+        prompt = f"""You are a personal memory analyst. Based on the following memories from {date_str}, create a daily reflection.
+
+Memories from today:
+{items_text}
+
+Analyze these memories and provide a structured reflection in JSON format:
+{{
+    "summary": "A 1-2 sentence high-level summary of the day, focusing on what was most significant",
+    "key_events": ["List of 3-5 most notable events or facts from today"],
+    "sentiment": "overall emotional tone: positive, neutral, or negative",
+    "insights": "1-2 sentences about patterns, new discoveries about the user, or actionable observations"
+}}
+
+Guidelines:
+- Be concise but insightful
+- Focus on what would be useful to recall weeks or months later
+- If there are recurring themes, note them in insights
+- The summary should capture the essence of the day
+
+Return ONLY valid JSON, no other text."""
+
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+        await self._report_usage(response)
+        
+        try:
+            result = json.loads(response.choices[0].message.content)
+            # Ensure all expected keys exist with defaults
+            return {
+                "summary": result.get("summary", "No summary available."),
+                "key_events": result.get("key_events", []),
+                "sentiment": result.get("sentiment", "neutral"),
+                "insights": result.get("insights", ""),
+            }
+        except (json.JSONDecodeError, KeyError):
+            return {
+                "summary": f"Daily reflection for {date_str} (parsing failed).",
+                "key_events": [],
+                "sentiment": "neutral",
+                "insights": "",
+            }
+
+    async def generate_weekly_summary(
+        self,
+        daily_reflections: List[str],
+        week_str: str,
+    ) -> dict:
+        """
+        Generate a weekly summary from daily reflections.
+        
+        Args:
+            daily_reflections: List of daily reflection content strings
+            week_str: Week identifier (e.g., "2026-W05")
+            
+        Returns:
+            Dictionary with keys: summary, themes, patterns, achievements, advice
+        """
+        items_text = "\n\n".join([f"Day {i+1}:\n{item}" for i, item in enumerate(daily_reflections)])
+        
+        prompt = f"""You are a personal memory analyst. Based on the following daily reflections from {week_str}, create a weekly summary.
+
+Daily Reflections:
+{items_text}
+
+Analyze these reflections and provide a structured weekly summary in JSON format:
+{{
+    "summary": "A 2-3 sentence high-level summary of the week's key highlights",
+    "themes": ["List of 3-5 major themes or topics that dominated the week"],
+    "patterns": "Note any recurring behaviors, habits, or trends observed",
+    "achievements": ["List of notable accomplishments or milestones this week"],
+    "advice": "1-2 sentences of actionable advice for the coming week based on patterns observed"
+}}
+
+Guidelines:
+- Synthesize across days, don't just list them
+- Look for patterns that span multiple days
+- Focus on what would be useful for long-term recall
+- The advice should be practical and specific
+
+Return ONLY valid JSON, no other text."""
+
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+        await self._report_usage(response)
+        
+        try:
+            result = json.loads(response.choices[0].message.content)
+            return {
+                "summary": result.get("summary", "No summary available."),
+                "themes": result.get("themes", []),
+                "patterns": result.get("patterns", ""),
+                "achievements": result.get("achievements", []),
+                "advice": result.get("advice", ""),
+            }
+        except (json.JSONDecodeError, KeyError):
+            return {
+                "summary": f"Weekly summary for {week_str} (parsing failed).",
+                "themes": [],
+                "patterns": "",
+                "achievements": [],
+                "advice": "",
+            }
+
+    async def generate_monthly_summary(
+        self,
+        weekly_summaries: List[str],
+        month_str: str,
+    ) -> dict:
+        """
+        Generate a monthly summary from weekly summaries.
+        
+        Args:
+            weekly_summaries: List of weekly summary content strings
+            month_str: Month identifier (e.g., "2026-01")
+            
+        Returns:
+            Dictionary with keys: summary, keywords, trends, growth, goals
+        """
+        items_text = "\n\n".join([f"Week {i+1}:\n{item}" for i, item in enumerate(weekly_summaries)])
+        
+        prompt = f"""You are a personal memory analyst. Based on the following weekly summaries from {month_str}, create a monthly summary.
+
+Weekly Summaries:
+{items_text}
+
+Analyze these summaries and provide a structured monthly summary in JSON format:
+{{
+    "summary": "A 3-4 sentence comprehensive summary of the month's journey and key highlights",
+    "keywords": ["5-7 keywords that best represent this month"],
+    "trends": "Analysis of long-term trends, changes in focus, or evolving interests",
+    "growth": "Observations about personal growth, learning, or change during this month",
+    "goals": ["2-3 suggested goals or focus areas for the next month based on patterns"]
+}}
+
+Guidelines:
+- Take a bird's-eye view of the entire month
+- Look for evolution and change over the weeks
+- Keywords should be specific and meaningful, not generic
+- Growth observations should be insightful and actionable
+- Goals should flow naturally from observed patterns
+
+Return ONLY valid JSON, no other text."""
+
+        response = await self.client.chat.completions.create(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            response_format={"type": "json_object"},
+        )
+        await self._report_usage(response)
+        
+        try:
+            result = json.loads(response.choices[0].message.content)
+            return {
+                "summary": result.get("summary", "No summary available."),
+                "keywords": result.get("keywords", []),
+                "trends": result.get("trends", ""),
+                "growth": result.get("growth", ""),
+                "goals": result.get("goals", []),
+            }
+        except (json.JSONDecodeError, KeyError):
+            return {
+                "summary": f"Monthly summary for {month_str} (parsing failed).",
+                "keywords": [],
+                "trends": "",
+                "growth": "",
+                "goals": [],
+            }

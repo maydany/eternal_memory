@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 router = APIRouter()
 
-CONFIG_PATH = Path.home() / ".openclaw" / "config" / "memory_config.yaml"
+CONFIG_PATH = Path.cwd() / "user-memory" / "config" / "memory_config.yaml"
 
 
 class LLMSettings(BaseModel):
@@ -77,7 +77,7 @@ async def set_api_key(provider: str, api_key: str):
         os.environ["OPENAI_API_KEY"] = api_key
         
         # Also save to .env file for persistence
-        env_path = Path.home() / ".openclaw" / ".env"
+        env_path = Path.cwd() / "user-memory" / ".env"
         env_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Read existing .env

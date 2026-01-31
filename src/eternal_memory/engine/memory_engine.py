@@ -21,7 +21,8 @@ from eternal_memory.pipelines.flush import FlushPipeline
 from eternal_memory.pipelines.predict import PredictPipeline
 from eternal_memory.pipelines.retrieve import RetrievePipeline
 from eternal_memory.scheduling.scheduler import CronScheduler
-from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance
+from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance, get_job_function
+from eternal_memory.scheduling.jobs import job_daily_reflection, job_maintenance, get_job_function
 from eternal_memory.vault.markdown_vault import MarkdownVault
 
 
@@ -94,7 +95,7 @@ class EternalMemorySystem(EternalMemoryEngine):
         self.scheduler = CronScheduler()
         
         self._initialized = False
-    
+
     async def initialize(self) -> None:
         """
         Initialize all system components.
@@ -177,17 +178,54 @@ class EternalMemorySystem(EternalMemoryEngine):
         # Register standard cron jobs
         # Daily Reflection (every 24h = 86400s)
         self.scheduler.add_job(
-            "daily_reflection",
-            86400,
-            lambda: job_daily_reflection(self)
+            name="daily_reflection",
+            interval_seconds=86400,
+            func=lambda: job_daily_reflection(self),
+            job_type="daily_reflection",
+            is_system=True,
         )
         
         # Maintenance/Consolidation (every 12h = 43200s)
         self.scheduler.add_job(
-            "maintenance", 
-            43200, 
-            lambda: job_maintenance(self)
+            name="maintenance", 
+            interval_seconds=43200, 
+            func=lambda: job_maintenance(self),
+            job_type="maintenance",
+            is_system=True,
         )
+        
+        # Save system jobs to DB (so they appear in the UI)
+        await self.repository.save_scheduled_task(
+            name="daily_reflection",
+            job_type="daily_reflection",
+            interval_seconds=86400,
+            enabled=True,
+            is_system=True,
+        )
+        await self.repository.save_scheduled_task(
+            name="maintenance",
+            job_type="maintenance",
+            interval_seconds=43200,
+            enabled=True,
+            is_system=True,
+        )
+        await self.repository.save_scheduled_task(
+            name="weekly_summary",
+            job_type="weekly_summary",
+            interval_seconds=604800,  # 7 days
+            enabled=True,
+            is_system=True,
+        )
+        await self.repository.save_scheduled_task(
+            name="monthly_summary",
+            job_type="monthly_summary",
+            interval_seconds=2592000,  # 30 days
+            enabled=True,
+            is_system=True,
+        )
+        
+        # Load any custom jobs from DB
+        await self._load_custom_jobs_from_db()
         
         # Start the scheduler
         await self.scheduler.start()
@@ -202,6 +240,36 @@ class EternalMemorySystem(EternalMemoryEngine):
         if self.repository:
             await self.repository.disconnect()
         self._initialized = False
+    
+    async def _load_custom_jobs_from_db(self) -> None:
+        """Load custom jobs from database and register them with the scheduler."""
+        try:
+            tasks = await self.repository.get_scheduled_tasks()
+            for task in tasks:
+                # Skip system tasks (already registered)
+                if task["is_system"]:
+                    continue
+                
+                # Skip already registered jobs
+                if task["name"] in [j["name"] for j in self.scheduler.get_jobs()]:
+                    continue
+                
+                # Get the job function
+                job_func = get_job_function(task["job_type"])
+                if job_func is None:
+                    continue
+                
+                # Register the job
+                self.scheduler.add_job(
+                    name=task["name"],
+                    interval_seconds=task["interval_seconds"],
+                    func=lambda f=job_func: f(self),
+                    job_type=task["job_type"],
+                    is_system=False,
+                )
+        except Exception as e:
+            # Log but don't fail startup
+            print(f"Warning: Failed to load custom jobs from DB: {e}")
     
     async def memorize(
         self,

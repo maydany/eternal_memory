@@ -51,9 +51,10 @@ class ConsolidatePipeline:
             "reorganized_categories": 0,
         }
         
-        # 1. Archive stale items
-        archived = await self._archive_stale_items()
-        stats["archived_items"] = archived
+        # 1. Archive stale items (DISABLED for Eternal Memory philosophy)
+        # We do not move/delete items. Stale items remain in DB.
+        # archived = await self._archive_stale_items()
+        stats["archived_items"] = 0
         
         # 2. Update category summaries
         summaries = await self._update_category_summaries()
@@ -62,6 +63,13 @@ class ConsolidatePipeline:
         # 3. Check and reorganize large categories
         reorg = await self._reorganize_large_categories()
         stats["reorganized_categories"] = reorg
+        
+        # 4. Database Optimization
+        try:
+            await self.repository.optimize_database()
+            stats["db_optimized"] = True
+        except Exception:
+            stats["db_optimized"] = False
         
         return stats
     

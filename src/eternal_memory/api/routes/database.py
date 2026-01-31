@@ -19,6 +19,7 @@ class MemoryItemResponse(BaseModel):
     category: str
     type: str
     importance: float
+    mention_count: int
     created_at: datetime
 
 class PaginatedResponse(BaseModel):
@@ -51,6 +52,7 @@ async def list_items(
                     "category": item.category_path,
                     "type": item.type.value if hasattr(item.type, "value") else str(item.type),
                     "importance": item.importance,
+                    "mention_count": getattr(item, "mention_count", 1),
                     "created_at": item.created_at,
                 }
                 for item in items

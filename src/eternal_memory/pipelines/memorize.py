@@ -173,7 +173,27 @@ class MemorizePipeline:
         
         if similar_items:
             existing = similar_items[0]
-            await self.repository.update_last_accessed(existing.id)
+            
+            # Reinforcement Logic:
+            # If the same fact is mentioned again, increase its importance
+            # Formula: min(1.0, current_importance + 0.1)
+            new_importance = min(1.0, existing.importance + 0.1)
+            
+            new_count = await self.repository.reinforce_memory_item(existing.id, new_importance)
+            
+            # Update local object to reflect changes
+            existing.importance = new_importance
+            existing.mention_count = new_count
+            existing.last_accessed = datetime.now()
+            
+            # Sync update to vault file
+            await self.vault.update_memory_in_file(
+                category_path=existing.category_path,
+                content=existing.content,
+                new_importance=new_importance,
+                mention_count=new_count
+            )
+            
             return existing
 
         # 3. Smart Categorization (if no path provided)

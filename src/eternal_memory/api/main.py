@@ -20,7 +20,7 @@ from eternal_memory.engine.memory_engine import EternalMemorySystem
 # Load .env file at startup
 def load_env_file():
     """Load environment variables from ~/.openclaw/.env if it exists."""
-    env_path = Path.home() / ".openclaw" / ".env"
+    env_path = Path.cwd() / "user-memory" / ".env"
     if env_path.exists():
         with open(env_path) as f:
             for line in f:
@@ -98,12 +98,21 @@ async def get_memory_system() -> EternalMemorySystem:
 
 
 # Import and include routers
-from eternal_memory.api.routes import chat, vault, settings, database
+from eternal_memory.api.routes import chat, vault, settings, database, schedule, timeline
+
+
+def get_system() -> EternalMemorySystem:
+    """Get the global memory system instance for dependency injection."""
+    if memory_system is None:
+        raise HTTPException(status_code=503, detail="Memory system not initialized")
+    return memory_system
 
 app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
 app.include_router(vault.router, prefix="/api/vault", tags=["Vault"])
 app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
 app.include_router(database.router, prefix="/api/database", tags=["Database"])
+app.include_router(schedule.router, prefix="/api/schedule", tags=["Schedule"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["Timeline"])
 
 
 @app.get("/")

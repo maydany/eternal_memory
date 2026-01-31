@@ -67,6 +67,10 @@ export default function Layout() {
             <Database className="w-5 h-5" />
             <span>Database</span>
           </NavLink>
+          <NavLink to="/timeline" className={linkClass}>
+            <LayoutGrid className="w-5 h-5" />
+            <span>Timeline</span>
+          </NavLink>
           <NavLink to="/settings" className={linkClass}>
             <Settings className="w-5 h-5" />
             <span>Settings</span>

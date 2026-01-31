@@ -50,6 +50,10 @@ class MemoryItem(BaseModel):
         le=1.0,
         description="Salience/importance score (0.0-1.0)"
     )
+    mention_count: int = Field(
+        default=1,
+        description="Number of times this fact has been mentioned/reinforced"
+    )
     source_resource_id: Optional[UUID] = Field(
         default=None,
         description="Reference to the original resource"

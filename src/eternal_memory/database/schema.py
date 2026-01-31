@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS memory_items (
     type VARCHAR(20) DEFAULT 'fact',            -- fact, preference, event, plan
     importance FLOAT DEFAULT 0.5,               -- 0.0 to 1.0 (Salience)
     confidence FLOAT DEFAULT 1.0,               -- 0.0 to 1.0
+    mention_count INTEGER DEFAULT 1,            -- Reinforcement counter
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_accessed TIMESTAMPTZ DEFAULT NOW()
 );
@@ -56,6 +57,19 @@ CREATE TABLE IF NOT EXISTS token_usage (
     completion_tokens BIGINT DEFAULT 0,
     total_tokens BIGINT DEFAULT 0,
     updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Scheduled Tasks: Persistent Job Registry
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    job_type TEXT NOT NULL,
+    interval_seconds INT NOT NULL,
+    enabled BOOLEAN DEFAULT true,
+    is_system BOOLEAN DEFAULT false,
+    last_run TIMESTAMPTZ,
+    next_run TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indexes for performance
@@ -100,6 +114,13 @@ class DatabaseSchema:
         conn = await asyncpg.connect(self.connection_string)
         try:
             await conn.execute(SCHEMA_SQL)
+            
+            # Migration for existing databases: Add mention_count if it doesn't exist
+            try:
+                await conn.execute("ALTER TABLE memory_items ADD COLUMN IF NOT EXISTS mention_count INTEGER DEFAULT 1")
+            except Exception:
+                # Fallback for older Postgres versions or if column exists and IF NOT EXISTS is not supported
+                pass
         finally:
             await conn.close()
     
@@ -112,6 +133,7 @@ class DatabaseSchema:
         DROP TABLE IF EXISTS categories CASCADE;
         DROP TABLE IF EXISTS resources CASCADE;
         DROP TABLE IF EXISTS token_usage CASCADE;
+        DROP TABLE IF EXISTS scheduled_tasks CASCADE;
         """
         conn = await asyncpg.connect(self.connection_string)
         try:

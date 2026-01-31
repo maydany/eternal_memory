@@ -37,8 +37,11 @@ class MarkdownVault:
         Args:
             base_path: Base path for the vault. Defaults to ~/.openclaw
         """
-        self.base_path = Path(base_path or os.path.expanduser("~/.openclaw"))
-        self.memory_path = self.base_path / "memory"
+        self.base_path = Path(base_path or (Path.cwd() / "user-memory"))
+        
+        # separate memory path for easy viewing (Option A: Display Only)
+        self.memory_path = Path.cwd() / "memory_display_only"
+        
         self.storage_path = self.base_path / "storage"
         self.config_path = self.base_path / "config"
         self.sanitizer = Sanitizer()
@@ -183,6 +186,53 @@ consolidation:
         
         return filepath
     
+    async def update_memory_in_file(
+        self,
+        category_path: str,
+        content: str,
+        new_importance: float,
+        mention_count: int,
+    ) -> bool:
+        """
+        Update a specific memory item in the file (e.g., add reinforcement count).
+        Returns True if found and updated.
+        """
+        filepath = await self.ensure_category_file(category_path)
+        
+        async with aiofiles.open(filepath, "r") as f:
+            lines = await f.readlines()
+        
+        updated = False
+        new_lines = []
+        
+        # Simple content matching logic - look for the line containing the content
+        # Note: This is fragile if content contains MD characters, but sufficient for V1
+        for line in lines:
+            if content in line:
+                # Keep the timestamp and type emoji, update the suffix
+                # Existing: - 📝 [2024-01-31] I love apples
+                # New:      - 📝 [2024-01-31] I love apples (x2)
+                
+                # Check if already has count
+                base_line = line.strip()
+                if " (x" in base_line and base_line.endswith(")"):
+                    # Strip existing count: ".... (x2)" -> "...."
+                    base_line = base_line.rsplit(" (x", 1)[0]
+                
+                if mention_count > 1:
+                    new_lines.append(f"{base_line} (x{mention_count})\n")
+                else:
+                    new_lines.append(f"{base_line}\n")
+                updated = True
+            else:
+                new_lines.append(line)
+        
+        if updated:
+            async with aiofiles.open(filepath, "w") as f:
+                await f.writelines(new_lines)
+                
+        return updated
+
     async def append_to_category(
         self,
         category_path: str,

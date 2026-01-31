@@ -73,8 +73,10 @@ brain/
 artifacts/
 .gemini/
 tmp_openclaw/
+user-memory/
 
 # Database
 *.db
 *.sqlite
 *.sqlite3
+memory_display_only/

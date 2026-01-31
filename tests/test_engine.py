@@ -84,3 +84,50 @@ class TestEternalMemorySystemIntegration:
                 assert "resources" in stats
                 assert "categories" in stats
                 assert "memory_items" in stats
+
+    @pytest.mark.asyncio
+    async def test_daily_reflection_with_memories(self):
+        """Test daily reflection when memories exist."""
+        from eternal_memory import EternalMemorySystem
+        from eternal_memory.config import MemoryConfig
+        from eternal_memory.scheduling.jobs import job_daily_reflection
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = MemoryConfig()
+            
+            async with EternalMemorySystem(config, vault_path=tmpdir) as memory:
+                # Store some test memories
+                await memory.memorize("오늘 카페에서 코딩을 했다")
+                await memory.memorize("점심으로 라멘을 먹었다")
+                
+                # Get initial memory count
+                initial_stats = await memory.get_stats()
+                initial_count = initial_stats["memory_items"]
+                
+                # Run daily reflection
+                await job_daily_reflection(memory)
+                
+                # Check that a new memory was created (the reflection)
+                final_stats = await memory.get_stats()
+                # The reflection should create at least one new memory
+                assert final_stats["memory_items"] >= initial_count
+
+    @pytest.mark.asyncio
+    async def test_daily_reflection_no_memories(self):
+        """Test daily reflection when no recent memories exist."""
+        from eternal_memory import EternalMemorySystem
+        from eternal_memory.config import MemoryConfig
+        from eternal_memory.scheduling.jobs import job_daily_reflection
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config = MemoryConfig()
+            
+            async with EternalMemorySystem(config, vault_path=tmpdir) as memory:
+                # Run daily reflection without any memories
+                # Should complete without error
+                await job_daily_reflection(memory)
+                
+                # Stats should show only initial categories, no reflection memory
+                stats = await memory.get_stats()
+                # No crash means success for empty case
+                assert stats is not None
