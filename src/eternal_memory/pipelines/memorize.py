@@ -11,11 +11,13 @@ Implements the memory storage pipeline as specified in Section 5.1:
 from datetime import datetime
 from typing import List, Optional
 from uuid import uuid4
+import time
 
 from eternal_memory.database.repository import MemoryRepository
 from eternal_memory.llm.client import LLMClient
 from eternal_memory.models.memory_item import Category, MemoryItem, MemoryType, Resource
 from eternal_memory.vault.markdown_vault import MarkdownVault
+from eternal_memory.pipelines.hooks import PipelineHookManager
 
 
 class MemorizePipeline:
@@ -32,10 +34,21 @@ class MemorizePipeline:
         repository: MemoryRepository,
         llm_client: LLMClient,
         vault: MarkdownVault,
+        enable_monitoring: bool = True,
     ):
         self.repository = repository
         self.llm = llm_client
         self.vault = vault
+        
+        # Initialize hook system
+        self.hooks = PipelineHookManager()
+        self._register_default_hooks()
+        
+        # Initialize performance monitoring
+        if enable_monitoring:
+            from eternal_memory.monitoring import get_monitor
+            self.monitor = get_monitor()
+            self._register_monitoring_hooks()
     
     async def execute(
         self,
@@ -55,6 +68,14 @@ class MemorizePipeline:
         metadata = metadata or {}
         created_items: List[MemoryItem] = []
         
+        # Initialize pipeline context
+        context = {
+            "text": text,
+            "metadata": metadata,
+            "created_items": created_items,
+            "start_time": time.time(),
+        }
+        
         # 1. Create resource entry for traceability
         resource = Resource(
             uri=metadata.get("uri", f"conversation/{datetime.now().isoformat()}"),
@@ -63,14 +84,22 @@ class MemorizePipeline:
             metadata=metadata,
         )
         await self.repository.create_resource(resource)
+        context["resource"] = resource
         
         # 2. Extract facts using LLM (No longer needs all category_paths)
+        await self.hooks.execute_before("extract", context)
+        
         extracted_facts = await self.llm.extract_facts(text, [])
         
         if not extracted_facts:
             # No meaningful facts extracted, still log to timeline
             await self.vault.append_to_timeline(text, datetime.now())
+            context["extracted_facts"] = []
+            await self.hooks.execute_after("extract", context)
             return []
+        
+        context["extracted_facts"] = extracted_facts
+        await self.hooks.execute_after("extract", context)
         
         # 3. Batch embed all facts at once (Performance optimization)
         # This reduces API calls from N to 1, saving ~70% cost and ~5x speed
@@ -81,8 +110,11 @@ class MemorizePipeline:
         
         # Single batch API call instead of N individual calls
         batch_embeddings = await self.llm.batch_generate_embeddings(fact_contents)
+        context["batch_embeddings"] = batch_embeddings
         
         # 4. Process each extracted fact with pre-computed embeddings
+        await self.hooks.execute_before("store", context)
+        
         for i, fact in enumerate(extracted_facts):
             content = fact.get("content", "")
             if not content:
@@ -98,6 +130,9 @@ class MemorizePipeline:
                 precomputed_embedding=batch_embeddings[i]  # Pass pre-computed embedding
             )
             created_items.append(item)
+        
+        context["created_items"] = created_items
+        await self.hooks.execute_after("store", context)
         
         # 5. Update timeline
         await self.vault.append_to_timeline(
@@ -291,3 +326,50 @@ class MemorizePipeline:
                 parent_id = category.id
         
         return await self.repository.get_category_by_path(path)
+    
+    def _register_default_hooks(self) -> None:
+        """Register built-in hooks for logging and performance tracking."""
+        import logging
+        logger = logging.getLogger("eternal_memory.pipeline")
+        
+        # Performance tracking hook (applies to all stages)
+        @self.hooks.before("*")
+        async def track_stage_start(stage: str, context: dict):
+            if "stage_timers" not in context:
+                context["stage_timers"] = {}
+            context["stage_timers"][stage] = time.time()
+        
+        @self.hooks.after("*")
+        async def track_stage_end(stage: str, context: dict):
+            if "stage_timers" in context and stage in context["stage_timers"]:
+                elapsed = time.time() - context["stage_timers"][stage]
+                logger.debug(f"[Pipeline] {stage} completed in {elapsed:.3f}s")
+        
+        # Extraction validation hook
+        @self.hooks.after("extract")
+        async def validate_extraction(context: dict):
+            facts = context.get("extracted_facts", [])
+            if len(facts) == 0:
+                logger.warning(f"No facts extracted from: {context['text'][:50]}...")
+            else:
+                logger.info(f"Extracted {len(facts)} facts")
+        
+        # Storage confirmation hook
+        @self.hooks.after("store")
+        async def log_storage_complete(context: dict):
+            items = context.get("created_items", [])
+            total_time = time.time() - context.get("start_time", time.time())
+            logger.info(f"Stored {len(items)} items in {total_time:.2f}s")
+    
+    def _register_monitoring_hooks(self) -> None:
+        """Register performance monitoring hooks."""
+        
+        # Record complete pipeline execution after store
+        @self.hooks.after("store")
+        async def record_metrics(context: dict):
+            await self.monitor.record_pipeline_execution(context)
+        
+        # Record embedding performance
+        @self.hooks.after("extract")
+        async def record_embedding_perf(context: dict):
+            await self.monitor.record_embedding_performance(context)

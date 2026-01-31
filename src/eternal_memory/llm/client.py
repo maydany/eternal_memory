@@ -16,13 +16,16 @@ from typing import List, Optional, Callable, Any
 from openai import AsyncOpenAI
 
 from eternal_memory.models.memory_item import MemoryType
+from eternal_memory.llm.base import EmbeddingProvider
+from eternal_memory.llm.openai_provider import OpenAIEmbeddingProvider
 
 
 class LLMClient:
     """
     Client for LLM interactions using OpenAI API.
     
-    Supports any OpenAI-compatible API by setting the base URL.
+    Supports multiple embedding providers (OpenAI, Gemini) through
+    the adapter pattern.
     """
     
     def __init__(
@@ -33,12 +36,22 @@ class LLMClient:
         usage_callback: Optional[callable] = None,
         enable_embedding_cache: bool = True,
         max_cache_size: int = 1000,
+        embedding_provider: str = "openai",
+        embedding_api_key: Optional[str] = None,
     ):
         self.model = model
         self.usage_callback = usage_callback
         self.client = AsyncOpenAI(
             api_key=api_key or os.getenv("OPENAI_API_KEY"),
             base_url=base_url,
+        )
+        
+        # Initialize embedding provider
+        self.embedding_provider_name = embedding_provider
+        self._embedding_provider = self._create_embedding_provider(
+            embedding_provider,
+            embedding_api_key or api_key,
+            base_url,
         )
         
         # Embedding cache (LRU)
@@ -50,6 +63,39 @@ class LLMClient:
         # Cache statistics
         self._cache_hits = 0
         self._cache_misses = 0
+    
+    def _create_embedding_provider(
+        self,
+        provider: str,
+        api_key: Optional[str],
+        base_url: Optional[str],
+    ) -> EmbeddingProvider:
+        """
+        Factory method to create the appropriate embedding provider.
+        
+        Args:
+            provider: Provider name ("openai" or "gemini")
+            api_key: API key for the provider
+            base_url: Base URL for OpenAI-compatible APIs
+            
+        Returns:
+            EmbeddingProvider instance
+        """
+        if provider == "openai":
+            return OpenAIEmbeddingProvider(
+                api_key=api_key or os.getenv("OPENAI_API_KEY"),
+                base_url=base_url,
+            )
+        elif provider == "gemini":
+            from eternal_memory.llm.gemini_provider import GeminiEmbeddingProvider
+            return GeminiEmbeddingProvider(
+                api_key=api_key or os.getenv("GOOGLE_API_KEY"),
+            )
+        else:
+            raise ValueError(
+                f"Unknown embedding provider: {provider}. "
+                f"Supported providers: openai, gemini"
+            )
     
     async def _report_usage(self, response: Any, model_override: str = None):
         """Helper to report token usage via callback."""
@@ -151,7 +197,8 @@ Return ONLY the clarified query, nothing else."""
         Internally uses batch_generate_embeddings for consistency.
         This ensures all embedding calls benefit from batch optimization.
         
-        Uses text-embedding-ada-002 model. Caches results to reduce API calls.
+        Uses the configured embedding provider (OpenAI or Gemini).
+        Caches results to reduce API calls.
         """
         # Use batch embedding with single item for consistency
         embeddings = await self.batch_generate_embeddings([text])
@@ -166,6 +213,8 @@ Return ONLY the clarified query, nothing else."""
         - Reduces API calls from N to 1
         - Reduces cost by ~70%
         - Improves speed by ~5x
+        
+        Supports multiple providers (OpenAI, Gemini) through adapters.
         
         Args:
             texts: List of text strings to embed
@@ -199,19 +248,12 @@ Return ONLY the clarified query, nothing else."""
         if not uncached_texts:
             return result_embeddings
         
-        # Batch API call for uncached texts
+        # Batch API call for uncached texts using provider adapter
         self._cache_misses += len(uncached_texts)
-        response = await self.client.embeddings.create(
-            model="text-embedding-ada-002",
-            input=uncached_texts,  # OpenAI API accepts list of strings
-        )
-        
-        # Report usage for embeddings model
-        await self._report_usage(response, model_override="text-embedding-ada-002")
+        embeddings_from_api = await self._embedding_provider.batch_embed(uncached_texts)
         
         # Process results and update cache
-        for i, embedding_data in enumerate(response.data):
-            embedding = embedding_data.embedding
+        for i, embedding in enumerate(embeddings_from_api):
             original_index = uncached_indices[i]
             text = uncached_texts[i]
             
