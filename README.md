@@ -10,7 +10,13 @@
 
 ## Overview
 
-Eternal Memory는 차세대 AI 에이전트를 위한 **Entity-Level 영구 기억 시스템**입니다. 검증된 학술 연구와 업계 표준을 기반으로, 기존 RAG 시스템의 한계를 극복하는 하이브리드 아키텍처를 구현했습니다.
+Eternal Memory는 차세대 AI 에이전트를 위한 **Entity-Level 영구 기억 시스템**입니다. 검증된 학술 연구(MemGPT, LangMem, Generative Agents)를 기반으로, AI 에이전트의 장기 기억 관리에서 직면하는 핵심 과제들을 해결합니다:
+
+| Challenge | Our Solution |
+|-----------|--------------|
+| **정보 충돌** — 업데이트된 정보와 기존 정보가 혼재 | Semantic Triples로 엔티티 단위 자동 충돌 해결 |
+| **검색 지연** — 대규모 기억에서의 응답 속도 저하 | HNSW 벡터 인덱스로 수백만 기억 중 ~50ms 검색 |
+| **컨텍스트 비용** — 긴 대화의 토큰 폭증 | Multi-Tier Context로 일관된 토큰 예산 유지 |
 
 ### 🎓 Built on Validated Research
 
@@ -19,32 +25,49 @@ Eternal Memory는 차세대 AI 에이전트를 위한 **Entity-Level 영구 기�
 | **Memory Supersede** | MemGPT (Packer et al., 2023) | 삭제 대신 비활성화로 히스토리 보존, 컨텍스트 관리 |
 | **Semantic Triples** | LangMem (LangChain) | Subject-Predicate-Object 분해로 Entity-Level 정밀 업데이트 |
 | **Salience Scoring** | Generative Agents (Stanford, 2023) | 중요도 기반 기억 평가, Reflection을 통한 장기 기억 구조화 |
-| **Matryoshka Embeddings** | MRL (Kusupati et al., 2022) | 유연한 차원 축소로 다국어 정밀도 최적화 |
+| **Matryoshka Embeddings** | MRL (Kusupati et al., 2022) | text-embedding-3-large로 한국어↔영어 0.90+ 유사도 달성 |
 
-### Why Hybrid Architecture?
+### Hybrid Memory Architecture
 
-기존 RAG 시스템은 문장을 통째로 저장하여 정보 충돌 시 모든 버전을 반환합니다. Eternal Memory는 세 가지 레이어를 결합하여 이 문제를 해결합니다:
+Eternal Memory는 세 가지 레이어가 **상호 보완**하는 하이브리드 구조로 정밀성, 속도, 투명성을 동시에 달성합니다.
 
-| Layer | Role | Benefit |
-|-------|------|---------|
-| **Semantic Triples** | Subject-Predicate-Object 분해 | Entity-Level 정밀 업데이트, 자동 충돌 해결 |
-| **Vector Search** | pgvector HNSW 인덱스 | ~50ms 고속 검색, Fallback 레이어 |
-| **Markdown Vault** | 인간 친화적 파일 | 사람이 읽기 쉬운 형식, 기억 내용 확인용 |
+| Layer | Strength | Role |
+|-------|----------|------|
+| **Semantic Triples** | 정밀성 | `(Subject, Predicate, Object)` 분해로 엔티티 단위 충돌 해결 |
+| **Vector Search** | 속도 | HNSW 인덱스로 수백만 기억 중 ~50ms 내 검색 |
+| **Markdown Vault** | 투명성 | 사람이 읽고 편집 가능한 형태로 기억 미러링 |
 
-```
-❌ 기존 RAG: "React 17 사용" + "React 18로 마이그레이션" → 모든 버전 반환
-✅ Eternal Memory: (Project, uses_framework, React_17) → is_active: false
-                   (Project, uses_framework, React_18) → is_active: true  → 최신 정보만 반환
-```
+**상호 보완 설계**: Triple 추출 지연 시 Vector가 즉시 검색을 제공하고, 복잡한 쿼리에서는 Triple이 정밀 결과를 Vector가 Fallback을 담당합니다.
+
+### Multi-Tier Context Management
+
+긴 대화에서도 효율적인 토큰 관리를 위해 **계층적 컨텍스트 압축**을 적용합니다.
+
+| Tier | Content | Strategy |
+|------|---------|----------|
+| **Tier 1** | 최근 N턴 | 원본 유지 (Verbatim) |
+| **Tier 2** | 이전 대화 | Rolling Summary로 압축 |
+| **Tier 3** | 장기 기억 | Semantic Search로 필요 시 로드 |
+
+→ 수백 턴의 대화도 일관된 토큰 예산 내에서 컨텍스트 유지
 
 ## ✨ Key Features
 
+### Core Intelligence
 - **🧠 Semantic Triples**: LangMem 스타일 (Subject, Predicate, Object) 지식 그래프
 - **♻️ Memory Supersede**: MemGPT 논문 기반 - 삭제 대신 비활성화로 히스토리 보존
 - **🔍 Hierarchical Retrieval**: Triple → MemoryItem → Fallback 계층적 검색
 - **⚡ Lazy Evaluation**: 즉시 저장 → 백그라운드 Triple 추출 (80% 비용 절감)
 - **🌐 Multilingual Precision**: text-embedding-3-large (1536d, Matryoshka) 기반
-- **📁 Markdown Vault**: 모든 기억을 사람이 읽기 쉬운 Markdown으로 미러링 (읽기 전용)
+
+### Reliability & Persistence
+- **☁️ Server-Side Sessions**: PostgreSQL 기반 세션 영속성 (멀티 디바이스 지원)
+- **🛡️ Buffer Reliability**: `beforeunload`, `visibilitychange`, `pagehide`, 세션 전환 시 자동 플러시
+- **🔄 Graceful Degradation**: Triple 추출 실패해도 MemoryItem으로 무중단 동작
+- **📜 Rolling Summary**: Multi-Tier Context (Verbatim + Summary + Memory) 관리
+
+### Developer Experience
+- **📁 Markdown Vault**: 모든 기억을 사람이 읽기 쉬운 Markdown으로 미러링
 - **🖥️ Modern UI**: React + TailwindCSS 기반 Chat/Settings/Database 인터페이스
 - **🔄 Real-time Tracing**: Process Tab에서 AI 추론 과정 실시간 관찰
 
@@ -213,15 +236,28 @@ await memory.consolidate()
 
 ```bash
 # Chat with memory context
-curl -X POST http://localhost:8000/chat \
+curl -X POST http://localhost:8000/api/chat/conversation \
   -H "Content-Type: application/json" \
-  -d '{"message": "What programming languages do I prefer?"}'
+  -d '{"message": "What programming languages do I prefer?", "mode": "fast"}'
 
 # Get memory statistics
-curl http://localhost:8000/stats
+curl http://localhost:8000/api/stats
 
 # List all memories
-curl http://localhost:8000/memories
+curl http://localhost:8000/api/memories
+
+# Session management (cross-device persistence)
+curl http://localhost:8000/api/sessions                    # List sessions
+curl http://localhost:8000/api/sessions/{id}               # Get session
+curl -X POST http://localhost:8000/api/sessions            # Create session
+
+# Buffer control
+curl http://localhost:8000/api/buffer/status               # Buffer status
+curl -X POST http://localhost:8000/api/buffer/flush        # Manual flush
+
+# Semantic triples
+curl http://localhost:8000/api/triples                     # List triples
+curl http://localhost:8000/api/triples/search?query=Python # Search triples
 ```
 
 ## 📚 Documentation
