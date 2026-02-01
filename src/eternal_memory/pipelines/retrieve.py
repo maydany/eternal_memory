@@ -276,9 +276,10 @@ class RetrievePipeline:
         
         Strategy:
         1. Search for relevant triples semantically
-        2. For MemoryItems with triples: use active triple content instead
-        3. For MemoryItems without triples: use original content (fallback)
-        4. Triple context is prefixed for higher precision
+        2. For MemoryItems with ALL triples inactive: EXCLUDE (outdated by supersede)
+        3. For MemoryItems with active triples: include (triple context provides precision)
+        4. For MemoryItems without any triples: use original content (fallback - not yet atomized)
+        5. Triple context is prefixed for higher precision
         
         Args:
             memory_items: Retrieved memory items from generative_agents_search
@@ -287,7 +288,7 @@ class RetrievePipeline:
         Returns:
             Tuple of (filtered_items, triple_context_string)
         """
-        # Search for relevant triples
+        # Search for relevant triples (active only for context building)
         triples = await self.repository.search_triples_semantic(
             query_embedding=query_embedding,
             limit=15,
@@ -295,46 +296,43 @@ class RetrievePipeline:
             active_only=True,
         )
         
-        if not triples:
-            # No relevant triples found, return memory items as-is
-            return memory_items, ""
-        
-        # Build mappings
-        # Map: memory_item_id -> list of active triples
-        triple_by_memory: Dict[UUID, List[SemanticTriple]] = {}
-        for triple in triples:
-            if triple.memory_item_id:
-                if triple.memory_item_id not in triple_by_memory:
-                    triple_by_memory[triple.memory_item_id] = []
-                triple_by_memory[triple.memory_item_id].append(triple)
-        
-        # Set of memory IDs that have been "covered" by triples
-        covered_memory_ids: Set[UUID] = set(triple_by_memory.keys())
-        
-        # Build triple context (high precision facts)
+        # Build triple context from active triples (high precision facts)
         triple_statements = []
         for triple in triples:
-            # Convert triple to natural language
             triple_statements.append(triple.to_natural_language())
         
         # Deduplicate and limit
         unique_statements = list(dict.fromkeys(triple_statements))[:5]
         triple_context = "; ".join(unique_statements)
         
-        # Filter memory items:
-        # - Exclude items whose ALL triples are inactive (outdated info)
-        # - Keep items without triples (fallback)
+        # CRITICAL FIX: Check ALL triples for each memory item (not just search results)
+        # This catches MemoryItems that HAD triples but ALL are now inactive (superseded)
+        all_triples_by_memory: Dict[UUID, List[SemanticTriple]] = {}
+        for item in memory_items:
+            # Fetch ALL triples for this memory item (including inactive)
+            item_all_triples = await self.repository.get_triples_for_memory_item(
+                item.id, 
+                active_only=False  # Get all to check if ANY exist
+            )
+            if item_all_triples:
+                all_triples_by_memory[item.id] = item_all_triples
+        
+        # Filter memory items based on triple status
         filtered_items = []
         for item in memory_items:
-            if item.id in covered_memory_ids:
-                # This memory has triples - check if any are active
-                item_triples = triple_by_memory.get(item.id, [])
-                if any(t.is_active for t in item_triples):
-                    # Has active triples, but we already have precision from triple context
-                    # Still include for category/metadata, but mark as covered
+            all_item_triples = all_triples_by_memory.get(item.id, [])
+            
+            if all_item_triples:
+                # Memory HAS triples (was atomized)
+                if any(t.is_active for t in all_item_triples):
+                    # Has at least one active triple - include for metadata
+                    # (triple context already provides precision for active facts)
                     filtered_items.append(item)
+                # else: ALL triples are inactive → EXCLUDE
+                # This memory's facts have been superseded at the triple level
             else:
                 # No triples for this memory - use original content (fallback)
+                # This is acceptable as the memory hasn't been atomized yet
                 filtered_items.append(item)
         
         return filtered_items, triple_context

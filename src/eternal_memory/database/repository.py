@@ -1205,6 +1205,9 @@ class MemoryRepository:
         """
         Mark an old triple as superseded by a new one.
         
+        Also propagates deactivation to parent MemoryItem if ALL its triples
+        become inactive (consistent state management).
+        
         Args:
             old_triple_id: Triple to mark as inactive
             new_triple_id: The new triple that replaces it
@@ -1213,6 +1216,13 @@ class MemoryRepository:
             True if supersede was successful
         """
         async with self._pool.acquire() as conn:
+            # First, get the memory_item_id before updating
+            old_triple_row = await conn.fetchrow(
+                "SELECT memory_item_id FROM semantic_triples WHERE id = $1",
+                old_triple_id,
+            )
+            
+            # Mark the triple as inactive
             result = await conn.execute(
                 """
                 UPDATE semantic_triples
@@ -1224,7 +1234,39 @@ class MemoryRepository:
                 old_triple_id,
                 new_triple_id,
             )
-            return result == "UPDATE 1"
+            
+            if result != "UPDATE 1":
+                return False
+            
+            # CRITICAL: Check if parent MemoryItem should be deactivated
+            # If ALL triples for this memory are now inactive, deactivate the parent
+            if old_triple_row and old_triple_row["memory_item_id"]:
+                memory_item_id = old_triple_row["memory_item_id"]
+                
+                # Count remaining active triples for this memory
+                active_count = await conn.fetchval(
+                    """
+                    SELECT COUNT(*) FROM semantic_triples 
+                    WHERE memory_item_id = $1 AND is_active = TRUE
+                    """,
+                    memory_item_id,
+                )
+                
+                if active_count == 0:
+                    # All triples are now inactive - deactivate parent MemoryItem
+                    # This ensures consistency: if all atomic facts are superseded,
+                    # the parent memory shouldn't appear in vector search results
+                    await conn.execute(
+                        """
+                        UPDATE memory_items
+                        SET is_active = FALSE,
+                            last_accessed = NOW()
+                        WHERE id = $1 AND is_active = TRUE
+                        """,
+                        memory_item_id,
+                    )
+            
+            return True
 
     async def get_triples_for_memory_item(
         self,
