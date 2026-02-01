@@ -64,7 +64,10 @@ AI: "Next.js 14를 사용하고 있고, 내부적으로 React를 활용합니다
 pgvector의 HNSW 인덱스를 활용해 수백만 개의 기억 중에서도 ~50ms 내에 유사한 항목을 검색합니다. 트리플이 아직 생성되지 않은 최신 기억도 벡터 검색으로 즉시 찾을 수 있어, Lazy Evaluation의 핵심 백본 역할을 합니다.
 
 **3. Markdown Vault (투명성)**  
-모든 기억을 사람이 읽고 편집할 수 있는 Markdown 파일로 미러링합니다. AI가 잘못 기억한 내용을 사용자가 직접 수정할 수 있고, 버전 관리(Git)와도 자연스럽게 통합됩니다.
+모든 기억을 사람이 읽을 수 있는 Markdown 파일로 **단방향 미러링**합니다. 사용자는 AI가 저장한 기억을 확인하고 검토할 수 있습니다.
+
+> [!NOTE]
+> **단방향 미러링**: Vault 파일 수정은 데이터베이스에 반영되지 않습니다. Vault는 읽기 전용 미러이며, 모든 실제 데이터는 PostgreSQL에 저장됩니다.
 
 **이 조합이 특별한 이유:**
 - 트리플만 있으면 → 추출 실패 시 기억 손실
@@ -316,12 +319,18 @@ eternal_memory/
 │   ├── config.py                     # 설정 관리
 │   │
 │   ├── api/                          # FastAPI 라우트
-│   │   ├── main.py
-│   │   └── routes/
-│   │       ├── memories.py
-│   │       ├── stats.py
-│   │       ├── jobs.py
-│   │       └── ...
+│   │   ├── main.py                   # 앱 진입점
+│   │   └── routes/                   # 11개 라우터
+│   │       ├── buffer.py             # Buffer API
+│   │       ├── chat.py               # Chat/Conversation API (24KB)
+│   │       ├── database.py           # DB 연결/스키마
+│   │       ├── metrics.py            # 성능 메트릭
+│   │       ├── schedule.py           # 스케줄 관리 (7KB)
+│   │       ├── sessions.py           # Server-side 세션 (10KB)
+│   │       ├── settings.py           # 시스템 설정 (21KB)
+│   │       ├── timeline.py           # 타임라인
+│   │       ├── triples.py            # Semantic Triples
+│   │       └── vault.py              # Markdown Vault
 │   │
 │   ├── database/                     # 데이터베이스 레이어
 │   │   ├── schema.py                 # PostgreSQL 스키마
@@ -333,18 +342,29 @@ eternal_memory/
 │   │   └── context_pruner.py         # 버퍼 관리
 │   │
 │   ├── llm/                          # LLM 통합
-│   │   └── client.py                 # OpenAI 클라이언트
+│   │   ├── base.py                   # EmbeddingProvider ABC
+│   │   ├── client.py                 # LLMClient (911 lines)
+│   │   ├── openai_provider.py        # OpenAI embedding-3-large
+│   │   └── gemini_provider.py        # Gemini embedding
 │   │
 │   ├── models/                       # 데이터 모델
 │   │   ├── memory_item.py            # MemoryItem, Resource, Category
-│   │   └── retrieval.py              # RetrievalResult
+│   │   ├── retrieval.py              # RetrievalResult
+│   │   └── semantic_triple.py        # SemanticTriple 모델
+│   │
+│   ├── monitoring/                   # 성능 모니터링
+│   │   └── performance.py            # 메트릭 수집 (7KB)
+│   │
+│   ├── agent/                        # AI 에이전트 통합
+│   │   └── user_model.py             # UserModel (12KB)
 │   │
 │   ├── pipelines/                    # 핵심 파이프라인
-│   │   ├── memorize.py               # 저장
-│   │   ├── retrieve.py               # 검색
+│   │   ├── memorize.py               # 저장 (20KB)
+│   │   ├── retrieve.py               # 검색 (13KB)
 │   │   ├── predict.py                # 예측
 │   │   ├── consolidate.py            # 정리
-│   │   └── flush.py                  # 버퍼 플러시
+│   │   ├── flush.py                  # 버퍼 플러시 (8KB)
+│   │   └── hooks.py                  # 파이프라인 hooks
 │   │
 │   ├── scheduling/                   # 스케줄링
 │   │   ├── scheduler.py              # Cron 스케줄러
@@ -388,7 +408,7 @@ eternal_memory/
 
 **주요 모듈:**
 - `engine/`: 시스템의 중앙 오케스트레이터
-- `pipelines/`: 4개의 핵심 파이프라인 (memorize, retrieve, predict, consolidate)
+- `pipelines/`: 5개의 핵심 파이프라인 + hooks (memorize, retrieve, predict, consolidate, flush, hooks)
 - `database/`: PostgreSQL 스키마 및 저장소 패턴
 - `vault/`: Markdown 파일 시스템 관리
 - `scheduling/`: 백그라운드 작업 스케줄러
@@ -1306,39 +1326,79 @@ def job_maintenance(system: EternalMemorySystem):
 
 ### 13.1 LLMClient 클래스
 
-`llm/client.py`는 OpenAI API를 래핑합니다:
+`llm/client.py`는 OpenAI API를 래핑하며, **다중 임베딩 프로바이더**를 지원합니다:
 
 ```python
 class LLMClient:
-    def __init__(self, model: str, api_key: str, base_url: str = None):
-        self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self.model = model
-        self.embedding_model = "text-embedding-ada-002"
-        
-        # LRU 임베딩 캐시
-        self._embedding_cache: dict[str, List[float]] = {}
-        self._cache_order: list[str] = []
-        self.max_cache_size = 1000
+    """
+    Client for LLM interactions using OpenAI API.
+    Supports multiple embedding providers (OpenAI, Gemini) through adapter pattern.
+    """
     
-    async def complete(
+    def __init__(
         self,
-        prompt: str,
-        temperature: float = 0.7,
-        max_tokens: int = 500
-    ) -> str:
-        response = await self.client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            max_tokens=max_tokens
+        api_key: Optional[str] = None,
+        model: str = "gpt-4o-mini",
+        embedding_provider: str = "openai",  # "openai" | "gemini"
+        embedding_api_key: Optional[str] = None,
+        enable_embedding_cache: bool = True,
+        max_cache_size: int = 1000,
+    ):
+        self.model = model
+        self.client = AsyncOpenAI(api_key=api_key or os.getenv("OPENAI_API_KEY"))
+        
+        # Multi-provider embedding adapter
+        self._embedding_provider = self._create_embedding_provider(
+            embedding_provider,
+            embedding_api_key or api_key,
         )
-        return response.choices[0].message.content
+        
+        # LRU embedding cache
+        self._embedding_cache: dict[str, List[float]] = {}
+        self._cache_order: list[str] = []  # LRU tracking
     
-    async def extract_facts(self, text: str) -> List[dict]:
-        prompt = EXTRACTION_PROMPT.format(text=text)
-        response = await self.complete(prompt, temperature=0.3)
-        return json.loads(response)
+    def _create_embedding_provider(self, provider: str, api_key: str):
+        """Factory pattern for embedding providers."""
+        if provider == "gemini":
+            from .gemini_provider import GeminiEmbeddingProvider
+            return GeminiEmbeddingProvider(api_key=api_key)
+        else:
+            from .openai_provider import OpenAIEmbeddingProvider
+            return OpenAIEmbeddingProvider(api_key=api_key)
 ```
+
+**OpenAI 임베딩 프로바이더** (`llm/openai_provider.py`):
+
+```python
+class OpenAIEmbeddingProvider(EmbeddingProvider):
+    """
+    OpenAI embedding provider using text-embedding-3-large 
+    with Matryoshka dimension reduction.
+    
+    Using embedding-3-large for improved multilingual performance (MIRACL: 54.9%).
+    Dimensions reduced from 3072 → 1536 for pgvector compatibility.
+    """
+    
+    def __init__(
+        self,
+        model: str = "text-embedding-3-large",  # NOT ada-002
+        dimensions: Optional[int] = 1536,  # Matryoshka reduction
+    ):
+        self.model = model
+        self.dimensions = dimensions
+    
+    async def batch_embed(self, texts: List[str]) -> List[List[float]]:
+        kwargs = {"model": self.model, "input": texts}
+        if self.dimensions and self.model.startswith("text-embedding-3"):
+            kwargs["dimensions"] = self.dimensions  # Matryoshka API
+        response = await self.client.embeddings.create(**kwargs)
+        return [item.embedding for item in response.data]
+```
+
+> [!IMPORTANT]
+> 2024년 마이그레이션: `text-embedding-ada-002` → `text-embedding-3-large`
+> - 다국어 성능 향상 (한국어 등)
+> - Matryoshka 차원 축소로 pgvector 호환성 유지
 
 ### 13.2 배치 임베딩 (성능 최적화)
 
@@ -1354,57 +1414,43 @@ async def batch_generate_embeddings(self, texts: List[str]) -> List[List[float]]
     - Reduces cost by ~70%
     - Improves speed by ~5x
     
-    Args:
-        texts: List of text strings to embed
-        
-    Returns:
-        List of embedding vectors in the same order as input texts
+    Supports multiple providers (OpenAI, Gemini) through adapters.
     """
     if not texts:
         return []
     
-    # Check cache first
+    # Check which texts need embedding (not in cache)
     uncached_texts = []
     uncached_indices = []
     result_embeddings = [None] * len(texts)
     
     for i, text in enumerate(texts):
-        if text in self._embedding_cache:
-            self._touch_cache(text)  # Update LRU order
+        if self.enable_embedding_cache and text in self._embedding_cache:
+            self._cache_hits += 1
             result_embeddings[i] = self._embedding_cache[text]
         else:
             uncached_texts.append(text)
             uncached_indices.append(i)
     
-    # If all cached, return early
     if not uncached_texts:
         return result_embeddings
     
-    # Single batch API call for uncached texts
-    response = await self.client.embeddings.create(
-        model="text-embedding-ada-002",
-        input=uncached_texts,  # OpenAI API accepts list
-    )
+    # Batch API call using provider adapter (NOT hardcoded model)
+    self._cache_misses += len(uncached_texts)
+    embeddings_from_api = await self._embedding_provider.batch_embed(uncached_texts)
     
     # Process results and update cache
-    for i, embedding_data in enumerate(response.data):
-        embedding = embedding_data.embedding
+    for i, embedding in enumerate(embeddings_from_api):
         original_index = uncached_indices[i]
-        text = uncached_texts[i]
-        
         result_embeddings[original_index] = embedding
-        self._add_to_cache(text, embedding)
+        if self.enable_embedding_cache:
+            self._add_to_cache(uncached_texts[i], embedding)
     
     return result_embeddings
 
 async def generate_embedding(self, text: str) -> List[float]:
-    """
-    Generate embedding for a single text.
-    
-    Internally uses batch_generate_embeddings for consistency.
-    """
-    embeddings = await self.batch_generate_embeddings([text])
-    return embeddings[0]
+    """Generate embedding for a single text via batch API."""
+    return (await self.batch_generate_embeddings([text]))[0]
 ```
 
 ### 13.3 임베딩 캐시 (LRU)
@@ -1631,54 +1677,61 @@ buffer_size: 10
 
 ## 15. API 구조
 
-### 15.1 FastAPI 라우트
+### 15.1 FastAPI 라우트 개요
 
-`api/main.py`의 주요 엔드포인트:
+`api/main.py`에서 10개의 라우터를 등록합니다:
 
 ```python
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI
+from contextlib import asynccontextmanager
 
-app = FastAPI(title="Eternal Memory API")
+# Lazy initialization with lifespan handler
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan handler - lazy initialization on first request."""
+    yield
+    # Cleanup
+    if memory_system:
+        await memory_system.close()
 
-# 전역 인스턴스
-memory_system: EternalMemorySystem = None
+app = FastAPI(
+    title="Eternal Memory API",
+    version="0.1.0",
+    lifespan=lifespan,
+)
 
-@app.on_event("startup")
-async def startup():
-    global memory_system
-    config = load_config()
-    memory_system = EternalMemorySystem(config)
-    await memory_system.initialize()
-    await memory_system.scheduler.start()
+# Router registration
+from eternal_memory.api.routes import (
+    chat, vault, settings, database, schedule,
+    timeline, metrics, buffer, triples, sessions
+)
 
-@app.post("/memorize")
-async def memorize_endpoint(request: MemorizeRequest):
-    """새로운 기억 저장"""
-    item = await memory_system.memorize(request.text, request.metadata)
-    return {"status": "success", "item_id": str(item.id)}
+app.include_router(chat.router, prefix="/api/chat", tags=["Chat"])
+app.include_router(vault.router, prefix="/api/vault", tags=["Vault"])
+app.include_router(settings.router, prefix="/api/settings", tags=["Settings"])
+app.include_router(database.router, prefix="/api/database", tags=["Database"])
+app.include_router(schedule.router, prefix="/api/schedule", tags=["Schedule"])
+app.include_router(timeline.router, prefix="/api/timeline", tags=["Timeline"])
+app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
+app.include_router(buffer.router, prefix="/api/buffer", tags=["Buffer"])
+app.include_router(triples.router, tags=["Triples"])  # prefix="/api/triples" in router
+app.include_router(sessions.router, prefix="/api/sessions", tags=["Sessions"])
+```
 
-@app.get("/retrieve")
-async def retrieve_endpoint(
-    query: str,
-    mode: Literal["fast", "deep"] = "fast",
-    limit: int = 5
-):
-    """기억 검색"""
-    result = await memory_system.retrieve(query, mode=mode)
-    return result.dict()
+**라우터 요약:**
 
-@app.get("/stats")
-async def stats_endpoint():
-    """시스템 통계"""
-    stats = await memory_system.repository.get_stats()
-    return stats
-
-@app.post("/jobs/{job_name}/trigger")
-async def trigger_job(job_name: str):
-    """수동으로 작업 실행"""
-    await memory_system.scheduler.trigger_job(job_name)
-    return {"status": "triggered"}
+| Router | Prefix | 주요 기능 |
+|--------|--------|----------|
+| `chat` | `/api/chat` | 대화, 메모리 검색/저장 |
+| `vault` | `/api/vault` | Markdown Vault 읽기 |
+| `settings` | `/api/settings` | 시스템 설정 조회/수정 |
+| `database` | `/api/database` | DB 연결/스키마 관리 |
+| `schedule` | `/api/schedule` | 작업 스케줄 관리 |
+| `timeline` | `/api/timeline` | 타임라인 조회 |
+| `metrics` | `/api/metrics` | 성능 메트릭 |
+| `buffer` | `/api/buffer` | 대화 버퍼 관리 |
+| `triples` | `/api/triples` | Semantic Triple 조회 |
+| `sessions` | `/api/sessions` | 채팅 세션 (Server-side) |
 ```
 
 ### 15.2 Sessions API
@@ -1731,16 +1784,87 @@ async def get_log_file(filename: str, limit: Optional[int] = 100):
 
 ### 15.4 Chat API
 
-대화 및 메모리 관리 엔드포인트입니다:
+대화 및 메모리 관리의 핵심 엔드포인트입니다 (620 lines):
 
 ```python
-@router.post("/chat/conversation")
-async def conversation(request: ConversationRequest):
+class ConversationRequest(BaseModel):
+    message: str
+    mode: Literal["fast", "deep"] = "fast"
+    conversation_history: Optional[list[dict]] = None
+    skip_memory_retrieval: bool = False  # LLM 컨텍스트 의존성 테스트용
+    context_summary: Optional[str] = None  # Rolling Summary
+    summarized_count: Optional[int] = None
+
+@router.post("/conversation")
+async def conversation(request: ConversationRequest, background_tasks: BackgroundTasks):
     """자연어 대화 + 자동 메모리 관리"""
-    # 1. 관련 메모리 검색
+    # 1. 관련 메모리 검색 (skip_memory_retrieval=False일 때)
     # 2. LLM 응답 생성 (메모리 컨텍스트 포함)
     # 3. 중요 정보 자동 저장 (비동기 백그라운드)
     # 4. Rolling Summary 컨텍스트 관리
+
+@router.post("/memorize")
+async def memorize(message: ChatMessage):
+    """정보를 메모리로 저장"""
+
+@router.post("/retrieve")
+async def retrieve(request: RetrieveRequest):
+    """메모리 검색 (fast/deep 모드)"""
+
+@router.post("/predict")
+async def predict_context(context: dict):
+    """선제적 컨텍스트 예측"""
+```
+
+### 15.5 Buffer API
+
+대화 버퍼 상태 조회 및 제어:
+
+```python
+@router.get("/status")
+async def get_buffer_status():
+    """버퍼 상태 조회"""
+    # Returns: message_count, estimated_tokens, threshold_tokens,
+    #          fill_percentage, auto_flush_enabled
+
+@router.get("/messages")
+async def get_buffer_messages(limit: Optional[int] = 20):
+    """버퍼 내 메시지 조회"""
+
+@router.post("/flush")
+async def flush_buffer(source: Optional[str] = "manual"):
+    """수동 버퍼 플러시"""
+    # source: "manual" | "session_end" | "idle_timeout" | "visibility_change"
+```
+
+### 15.6 Triples API
+
+Semantic Triple (Subject-Predicate-Object) 조회:
+
+```python
+@router.get("")
+async def list_triples(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    active_only: bool = Query(False),
+):
+    """모든 Triple 조회 (페이지네이션)"""
+
+@router.get("/search")
+async def search_triples_by_entity(
+    entity: str,
+    search_subject: bool = True,
+    search_object: bool = True,
+):
+    """엔티티 이름으로 Triple 검색"""
+
+@router.get("/{triple_id}")
+async def get_triple(triple_id: str):
+    """단일 Triple 조회"""
+
+@router.get("/memory/{memory_item_id}")
+async def get_triples_for_memory(memory_item_id: str):
+    """특정 메모리 항목의 Triple 조회"""
 ```
 
 ## 16. 보안 및 권한 관리
@@ -2060,3 +2184,4 @@ Reciprocal Rank Fusion (RRF)을 통해 벡터 검색과 키워드 검색을 결�
 | 2.0.0 | 2026-01-31 | 구현 완료, API 문서화 |
 | 3.0.0 | 2026-02-01 | Semantic Triples, MemGPT Supersede, Lazy Evaluation 추가 |
 | 4.0.0 | 2026-02-02 | text-embedding-3-large 마이그레이션, Server-side 세션 관리, Generative Agents Search, Performance Monitoring, Sessions/Metrics API 추가 |
+| 4.1.0 | 2026-02-02 | **문서 감사**: 10개 API 라우터 문서화, Buffer/Triples API 추가, hooks.py 파이프라인 문서화, multi-provider embedding 패턴, monitoring/agent 디렉토리 추가, Vault 단방향 미러링 명확화 |
