@@ -135,6 +135,25 @@ CREATE INDEX IF NOT EXISTS idx_triple_is_active
     ON semantic_triples(is_active);
 CREATE INDEX IF NOT EXISTS idx_triple_memory_item 
     ON semantic_triples(memory_item_id);
+
+-- 7. Chat Sessions: Server-side session persistence (cross-device)
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL DEFAULT 'New Chat',
+    messages JSONB NOT NULL DEFAULT '[]'::jsonb,     -- Array of Message objects
+    mode VARCHAR(10) NOT NULL DEFAULT 'fast',        -- 'fast' | 'deep'
+    context_summary TEXT,                            -- Rolling summary cache
+    summarized_count INTEGER DEFAULT 0,              -- For stale cache detection
+    selected_message_id VARCHAR(255),                -- Currently selected message
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_active_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Chat session indexes
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_created 
+    ON chat_sessions(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_last_active 
+    ON chat_sessions(last_active_at DESC);
 """
 
 

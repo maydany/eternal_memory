@@ -5,6 +5,7 @@ Integrates all pipelines into a unified system that implements
 the EternalMemoryEngine abstract base class.
 """
 
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
@@ -93,6 +94,12 @@ class EternalMemorySystem(EternalMemoryEngine):
         # Conversation buffer state
         self.conversation_buffer: list[dict] = []
         self.FLUSH_THRESHOLD_TOKENS = self.config.buffer.flush_threshold_tokens
+        
+        # Idle flush state tracking
+        self._last_buffer_activity: datetime = datetime.now()
+        self._flush_lock: asyncio.Lock = asyncio.Lock()
+        self._idle_flush_task: Optional[asyncio.Task] = None
+        self._idle_flush_timeout_minutes: int = self.config.buffer.idle_flush_timeout_minutes
         
         # Buffer persistence file
         vault_base = Path(vault_path) if vault_path else Path.home() / ".openclaw"
@@ -272,10 +279,23 @@ class EternalMemorySystem(EternalMemoryEngine):
         # Start the scheduler
         await self.scheduler.start()
         
+        # Start idle flush background task
+        if self._idle_flush_timeout_minutes > 0:
+            self._idle_flush_task = asyncio.create_task(self._idle_flush_loop())
+        
         self._initialized = True
     
     async def close(self) -> None:
         """Close all connections and cleanup with graceful buffer flush."""
+        # Cancel idle flush task
+        if self._idle_flush_task:
+            self._idle_flush_task.cancel()
+            try:
+                await self._idle_flush_task
+            except asyncio.CancelledError:
+                pass
+            self._idle_flush_task = None
+        
         # Flush remaining buffer before shutdown (only if fully initialized)
         if self.conversation_buffer and self._memorize_pipeline:
             print("⚠️  Flushing remaining buffer before shutdown...")
@@ -309,8 +329,38 @@ class EternalMemorySystem(EternalMemoryEngine):
         
         if restored:
             self.conversation_buffer = restored
+            self._last_buffer_activity = datetime.now()  # Update activity time on restore
             print(f"✅ Restored {len(restored)} messages from previous session")
             # Note: Buffer will be flushed naturally via check_and_flush or on server shutdown
+    
+    async def _idle_flush_loop(self) -> None:
+        """
+        Background task to flush buffer if idle for too long.
+        
+        Checks every minute if the buffer has been inactive for longer
+        than the configured timeout, and flushes if so.
+        """
+        while True:
+            try:
+                # Check every 60 seconds
+                await asyncio.sleep(60)
+                
+                # Skip if buffer is empty
+                if not self.conversation_buffer:
+                    continue
+                
+                # Calculate idle time
+                idle_minutes = (datetime.now() - self._last_buffer_activity).total_seconds() / 60
+                
+                if idle_minutes >= self._idle_flush_timeout_minutes:
+                    print(f"⏱️  Auto-flushing buffer after {idle_minutes:.1f} min idle...")
+                    await self.flush_buffer()
+                    
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                print(f"⚠️  Idle flush loop error: {e}")
+                # Continue running despite errors
     
     async def _load_custom_jobs_from_db(self) -> None:
         """Load custom jobs from database and register them with the scheduler."""
@@ -520,7 +570,10 @@ class EternalMemorySystem(EternalMemoryEngine):
         # 1. Add to memory buffer
         self.conversation_buffer.append(msg)
         
-        # 2. Persist to file immediately (durability)
+        # 2. Update last activity time for idle flush tracking
+        self._last_buffer_activity = datetime.now()
+        
+        # 3. Persist to file immediately (durability)
         async with aiofiles.open(self.buffer_file, "a", encoding="utf-8") as f:
             await f.write(json.dumps(msg, ensure_ascii=False) + "\n")
         
@@ -545,27 +598,40 @@ class EternalMemorySystem(EternalMemoryEngine):
             
         return await self.flush_buffer()
         
-    async def flush_buffer(self) -> List[MemoryItem]:
-        """Force flush buffer to permanent memory and clean up file."""
+    async def flush_buffer(self, source: str = "manual") -> List[MemoryItem]:
+        """
+        Force flush buffer to permanent memory and clean up file.
+        
+        Uses lock protection to prevent race conditions from multiple
+        concurrent flush attempts (e.g., idle flush + session end flush).
+        
+        Args:
+            source: Source of the flush request (for logging)
+            
+        Returns:
+            List of created MemoryItems, or empty list if buffer was empty
+        """
         if not self._initialized:
             await self.initialize()
+        
+        # Use lock to prevent concurrent flushes
+        async with self._flush_lock:
+            if not self.conversation_buffer:
+                return []
+                
+            print(f"🔄 Flushing memory buffer ({len(self.conversation_buffer)} messages, source={source})...")
             
-        if not self.conversation_buffer:
-            return []
+            # Execute flush pipeline
+            items = await self._flush_pipeline.execute(self.conversation_buffer)
             
-        print(f"🔄 Flushing memory buffer ({len(self.conversation_buffer)} messages)...")
-        
-        # Execute flush pipeline
-        items = await self._flush_pipeline.execute(self.conversation_buffer)
-        
-        # Clear memory buffer after successful flush
-        self.conversation_buffer = []
-        
-        # Remove persistent file (already processed)
-        if self.buffer_file.exists():
-            self.buffer_file.unlink()
-        
-        return items
+            # Clear memory buffer after successful flush
+            self.conversation_buffer = []
+            
+            # Remove persistent file (already processed)
+            if self.buffer_file.exists():
+                self.buffer_file.unlink()
+            
+            return items
 
     async def get_stats(self) -> dict:
         """

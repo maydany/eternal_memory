@@ -98,7 +98,7 @@ async def get_memory_system() -> EternalMemorySystem:
 
 
 # Import and include routers
-from eternal_memory.api.routes import chat, vault, settings, database, schedule, timeline, metrics, buffer, triples
+from eternal_memory.api.routes import chat, vault, settings, database, schedule, timeline, metrics, buffer, triples, sessions
 
 
 def get_system() -> EternalMemorySystem:
@@ -116,6 +116,7 @@ app.include_router(timeline.router, prefix="/api/timeline", tags=["Timeline"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(buffer.router, prefix="/api/buffer", tags=["Buffer"])
 app.include_router(triples.router, tags=["Triples"])
+app.include_router(sessions.router, prefix="/api/sessions", tags=["Sessions"])
 
 
 @app.get("/")

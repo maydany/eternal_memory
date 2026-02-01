@@ -52,6 +52,14 @@ export interface ProcessStep {
     history_messages?: number;
     total_messages?: number;
     pruned_messages?: number;
+    // LLM messages - exact messages sent to LLM
+    llm_messages?: {
+      index: number;
+      role: string;
+      label: string;
+      content: string;
+      content_length: number;
+    }[];
     tokens_prompt?: number;
     tokens_completion?: number;
     tokens_total?: number;
@@ -72,6 +80,14 @@ export interface ProcessStep {
     pending_extraction?: number;
     description?: string;
     error?: string | null;
+    // Rolling summary context (LangChain pattern)
+    rolling_summary?: {
+      enabled: boolean;
+      history_size: number;
+      window_size: number;
+      summarized_count: number;
+      summary_preview?: string | null;
+    };
   };
 }
 
@@ -122,7 +138,10 @@ class ApiClient {
   async conversation(
     message: string,
     mode: 'fast' | 'deep' = 'fast',
-    conversationHistory?: { role: string; content: string }[]
+    conversationHistory?: { role: string; content: string }[],
+    skipMemoryRetrieval: boolean = false,
+    contextSummary?: string,  // Cached summary from previous response
+    summarizedCount?: number  // For stale cache detection
   ) {
     return this.request<{
       response: string;
@@ -135,13 +154,117 @@ class ApiClient {
         facts_extracted: number;
         process_steps?: ProcessStep[];
       };
+      context_summary?: string | null;  // Rolling summary for caching
+      summarized_count?: number | null;  // For stale cache detection
     }>('/chat/conversation', {
       method: 'POST',
       body: JSON.stringify({
         message,
         mode,
         conversation_history: conversationHistory,
+        skip_memory_retrieval: skipMemoryRetrieval,
+        context_summary: contextSummary,
+        summarized_count: summarizedCount,
       }),
+    });
+  }
+
+  // --- Session API (Server-Side Persistence) ---
+  
+  async listSessions() {
+    return this.request<{
+      id: string;
+      name: string;
+      mode: string;
+      message_count: number;
+      created_at: string;
+      last_active_at: string;
+    }[]>('/sessions');
+  }
+
+  async getSession(sessionId: string) {
+    return this.request<{
+      id: string;
+      name: string;
+      messages: { id: string; role: string; content: string; timestamp: string; }[];
+      mode: string;
+      context_summary: string | null;
+      summarized_count: number;
+      selected_message_id: string | null;
+      created_at: string;
+      last_active_at: string;
+    }>(`/sessions/${sessionId}`);
+  }
+
+  async createSession(name: string = 'New Chat') {
+    return this.request<{
+      id: string;
+      name: string;
+      messages: { id: string; role: string; content: string; timestamp: string; }[];
+      mode: string;
+      context_summary: string | null;
+      summarized_count: number;
+      selected_message_id: string | null;
+      created_at: string;
+      last_active_at: string;
+    }>('/sessions', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  async updateSession(sessionId: string, updates: {
+    name?: string;
+    messages?: { id: string; role: string; content: string; timestamp: string; }[];
+    mode?: string;
+    context_summary?: string;
+    summarized_count?: number;
+    selected_message_id?: string;
+  }) {
+    return this.request<{
+      id: string;
+      name: string;
+      messages: { id: string; role: string; content: string; timestamp: string; }[];
+      mode: string;
+      context_summary: string | null;
+      summarized_count: number;
+      selected_message_id: string | null;
+      created_at: string;
+      last_active_at: string;
+    }>(`/sessions/${sessionId}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    });
+  }
+
+  async deleteSession(sessionId: string) {
+    return this.request<{ status: string; id: string }>(`/sessions/${sessionId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async addMessageToSession(sessionId: string, message: {
+    id: string;
+    role: string;
+    content: string;
+    timestamp: string;
+    memoriesRetrieved?: unknown[];
+    memoriesStored?: unknown[];
+    processingInfo?: unknown;
+  }) {
+    return this.request<{
+      id: string;
+      name: string;
+      messages: { id: string; role: string; content: string; timestamp: string; }[];
+      mode: string;
+      context_summary: string | null;
+      summarized_count: number;
+      selected_message_id: string | null;
+      created_at: string;
+      last_active_at: string;
+    }>(`/sessions/${sessionId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(message),
     });
   }
 

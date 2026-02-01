@@ -127,6 +127,7 @@ class BufferConfig(BaseModel):
     """Conversation buffer configuration."""
     flush_threshold_tokens: int = 4000  # OpenClaw default
     auto_flush_enabled: bool = True
+    idle_flush_timeout_minutes: int = 10  # Auto-flush if buffer inactive for this duration
 
 
 class MemoryConfig(BaseModel):

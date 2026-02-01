@@ -139,11 +139,65 @@ async def predict_context(context: dict):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Context window configuration
+CONTEXT_WINDOW_SIZE = 15  # Number of recent messages to keep verbatim
+
+
+async def summarize_old_context(
+    messages: list[dict], 
+    client, 
+    model: str
+) -> str:
+    """
+    Summarize older conversation messages for context preservation.
+    
+    Based on LangChain's ConversationSummaryBufferMemory pattern.
+    Preserves key facts while reducing token usage.
+    
+    Args:
+        messages: List of older messages to summarize
+        client: OpenAI async client
+        model: Model name to use
+        
+    Returns:
+        Concise summary of the conversation
+    """
+    if not messages:
+        return ""
+    
+    transcript = "\n".join([f"{m['role'].upper()}: {m['content']}" for m in messages])
+    
+    prompt = f"""Summarize this earlier conversation concisely, preserving:
+- Key facts mentioned by the user (names, preferences, important personal details)
+- Decisions made or questions asked  
+- Any context needed for continuing the conversation
+
+Conversation:
+{transcript}
+
+Provide a 2-3 sentence summary that captures the essential information:"""
+    
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+            max_tokens=200,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        # Return empty on error - better to lose summary than crash
+        return ""
+
+
 class ConversationRequest(BaseModel):
     """Natural conversation request."""
     message: str
     mode: Literal["fast", "deep"] = "fast"
     conversation_history: Optional[list[dict]] = None
+    skip_memory_retrieval: bool = False  # Skip memory retrieval for testing
+    context_summary: Optional[str] = None  # Cached summary from frontend
+    summarized_count: Optional[int] = None  # How many messages were summarized (for stale detection)
 
 
 class ConversationResponse(BaseModel):
@@ -152,6 +206,8 @@ class ConversationResponse(BaseModel):
     memories_retrieved: list[dict]
     memories_stored: list[dict]
     processing_info: dict
+    context_summary: Optional[str] = None  # Rolling summary for frontend caching
+    summarized_count: Optional[int] = None  # How many messages were summarized
 
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
@@ -188,49 +244,53 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
         retrieval_status = "completed"
         retrieval_error = None
         
-        # Extract semantic keywords from query using LLM
-        try:
-            api_key = os.getenv("OPENAI_API_KEY")
-            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-            from openai import AsyncOpenAI
-            keyword_client = AsyncOpenAI(api_key=api_key)
-            
-            keyword_prompt = f"""Extract 3-5 core semantic concepts from this query that would be useful for memory search.
+        # Extract semantic keywords from query using LLM (only if not skipping)
+        if not request.skip_memory_retrieval:
+            try:
+                api_key = os.getenv("OPENAI_API_KEY")
+                model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+                from openai import AsyncOpenAI
+                keyword_client = AsyncOpenAI(api_key=api_key)
+                
+                keyword_prompt = f"""Extract 3-5 core semantic concepts from this query that would be useful for memory search.
 Return ONLY a comma-separated list of keywords/concepts in the same language as the query.
 Do not include explanations.
 
 Query: {request.message}
 
 Keywords:"""
+                
+                keyword_response = await keyword_client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": keyword_prompt}],
+                    temperature=0,
+                    max_tokens=50,
+                )
+                keywords_raw = keyword_response.choices[0].message.content.strip()
+                semantic_keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()][:5]
+            except Exception:
+                semantic_keywords = []  # Silent fail, not critical
             
-            keyword_response = await keyword_client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": keyword_prompt}],
-                temperature=0,
-                max_tokens=50,
-            )
-            keywords_raw = keyword_response.choices[0].message.content.strip()
-            semantic_keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()][:5]
-        except Exception:
-            semantic_keywords = []  # Silent fail, not critical
-        
-        try:
-            result = await system.retrieve(request.message, request.mode)
-            if result.items:
-                memories_retrieved = [
-                    {
-                        "id": str(item.id),
-                        "content": item.content,
-                        "category_path": item.category_path,
-                        "confidence": item.confidence,
-                    }
-                    for item in result.items
-                ]
-                memory_context = "\n".join([f"- {item.content}" for item in result.items])
-                retrieval_categories = result.related_categories[:5] if result.related_categories else []
-        except Exception as e:
-            retrieval_status = "error"
-            retrieval_error = str(e)
+            try:
+                result = await system.retrieve(request.message, request.mode)
+                if result.items:
+                    memories_retrieved = [
+                        {
+                            "id": str(item.id),
+                            "content": item.content,
+                            "category_path": item.category_path,
+                            "confidence": item.confidence,
+                        }
+                        for item in result.items
+                    ]
+                    memory_context = "\n".join([f"- {item.content}" for item in result.items])
+                    retrieval_categories = result.related_categories[:5] if result.related_categories else []
+            except Exception as e:
+                retrieval_status = "error"
+                retrieval_error = str(e)
+        else:
+            # Skip memory retrieval - for testing raw LLM responses
+            retrieval_status = "skipped"
         
         step1_duration = int((time.time() - step1_start) * 1000)
         process_steps.append({
@@ -244,6 +304,7 @@ Keywords:"""
                 "categories_matched": retrieval_categories,
                 "error": retrieval_error,
                 "retrieved_items": memories_retrieved[:5],  # Show up to 5 items
+                "skipped": request.skip_memory_retrieval,
             }
         })
         
@@ -274,11 +335,52 @@ Keywords:"""
                 "content": f"Relevant memories about this user:\n{memory_context}"
             })
         
-        # Add conversation history if provided
+        # Add conversation history with Rolling Summary Buffer pattern
+        # Based on LangChain's ConversationSummaryBufferMemory
         history_count = 0
+        context_summary_used = None
         if request.conversation_history:
-            history_count = min(len(request.conversation_history), 10)
-            messages.extend(request.conversation_history[-10:])  # Last 10 messages
+            total_history = len(request.conversation_history)
+            
+            if total_history > CONTEXT_WINDOW_SIZE:
+                # Split: old messages → summary, recent → verbatim
+                old_messages = request.conversation_history[:-CONTEXT_WINDOW_SIZE]
+                recent_messages = request.conversation_history[-CONTEXT_WINDOW_SIZE:]
+                current_old_count = len(old_messages)
+                
+                # Stale Cache Detection: Check if cached summary covers all old messages
+                # Cache is stale if summarized_count doesn't match current old_messages count
+                cache_is_stale = (
+                    request.context_summary is None or
+                    request.summarized_count is None or
+                    request.summarized_count != current_old_count
+                )
+                
+                if cache_is_stale:
+                    # Generate new summary for ALL old messages
+                    context_summary_used = await summarize_old_context(
+                        old_messages, client, model
+                    )
+                    summarized_count_used = current_old_count
+                else:
+                    # Cache hit: reuse existing summary
+                    context_summary_used = request.context_summary
+                    summarized_count_used = request.summarized_count
+                
+                # Inject summary as system context
+                if context_summary_used:
+                    messages.append({
+                        "role": "system",
+                        "content": f"Earlier conversation context:\n{context_summary_used}"
+                    })
+                
+                messages.extend(recent_messages)
+                history_count = len(recent_messages)
+            else:
+                # Use all messages as-is
+                messages.extend(request.conversation_history)
+                history_count = total_history
+                summarized_count_used = 0
         
         # Add current user message
         messages.append({"role": "user", "content": request.message})
@@ -289,19 +391,52 @@ Keywords:"""
         messages = pruner.prune_messages(messages)
         messages_after_prune = len(messages)
         
+        # Build exact message preview for debugging (what LLM actually receives)
+        llm_messages_preview = []
+        for idx, msg in enumerate(messages):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            
+            # Determine message type for better labeling
+            if role == "system" and idx == 0:
+                label = "System Prompt"
+            elif role == "system" and "memories" in content.lower():
+                label = "Memory Context"
+            elif role == "system" and "earlier conversation" in content.lower():
+                label = "Earlier Context Summary"
+            elif role == "system":
+                label = "System Message"
+            elif role == "user":
+                label = "User Message"
+            elif role == "assistant":
+                label = "Assistant Message"
+            else:
+                label = role.capitalize()
+            
+            llm_messages_preview.append({
+                "index": idx,
+                "role": role,
+                "label": label,
+                "content": content,  # Full content for transparency
+                "content_length": len(content),
+            })
+        
         step2_duration = int((time.time() - step2_start) * 1000)
         process_steps.append({
             "step": "context_building",
             "status": "completed",
             "duration_ms": step2_duration,
             "details": {
-                "system_prompt_length": len(system_prompt),
-                "system_prompt_preview": system_prompt[:300] + ("..." if len(system_prompt) > 300 else ""),
-                "memory_context_length": len(memory_context),
-                "memory_context_preview": memory_context[:500] + ("..." if len(memory_context) > 500 else "") if memory_context else None,
-                "history_messages": history_count,
                 "total_messages": len(messages),
                 "pruned_messages": messages_before_prune - messages_after_prune,
+                "llm_messages": llm_messages_preview,  # Exact messages sent to LLM
+                "rolling_summary": {
+                    "enabled": bool(context_summary_used),
+                    "history_size": len(request.conversation_history) if request.conversation_history else 0,
+                    "window_size": CONTEXT_WINDOW_SIZE,
+                    "summarized_count": len(request.conversation_history) - CONTEXT_WINDOW_SIZE if request.conversation_history and len(request.conversation_history) > CONTEXT_WINDOW_SIZE else 0,
+                    "summary_preview": context_summary_used[:200] + "..." if context_summary_used and len(context_summary_used) > 200 else context_summary_used,
+                }
             }
         })
 
@@ -474,7 +609,9 @@ NONE"""
                 "memories_found": len(memories_retrieved),
                 "facts_extracted": len(memories_stored),
                 "process_steps": process_steps,
-            }
+            },
+            context_summary=context_summary_used,  # For frontend caching
+            summarized_count=summarized_count_used if 'summarized_count_used' in dir() else None,  # For stale detection
         )
         
     except Exception as e:

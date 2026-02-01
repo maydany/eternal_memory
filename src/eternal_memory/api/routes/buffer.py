@@ -70,12 +70,15 @@ async def get_buffer_messages(limit: Optional[int] = 20):
 
 
 @router.post("/flush")
-async def flush_buffer():
+async def flush_buffer(source: Optional[str] = "manual"):
     """
     Manually trigger buffer flush.
     
     This processes all buffered messages and stores extracted
     facts in permanent memory.
+    
+    Args:
+        source: Source of the flush request (manual, session_end, idle_timeout)
     """
     try:
         system = await get_memory_system()
@@ -86,14 +89,16 @@ async def flush_buffer():
                 "success": True,
                 "message": "Buffer was already empty",
                 "items_created": 0,
+                "source": source,
             }
         
-        items = await system.flush_buffer()
+        items = await system.flush_buffer(source=source)
         
         return {
             "success": True,
             "message": f"Flushed {message_count} messages",
             "items_created": len(items),
+            "source": source,
             "items": [
                 {
                     "id": str(item.id),

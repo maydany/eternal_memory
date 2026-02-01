@@ -28,15 +28,24 @@ export default function ChatPage() {
     addMessage, 
     setMode: setSessionMode, 
     setSelectedMessage: setSessionSelectedMessage,
-    setActiveSession 
+    setActiveSession,
+    initializeSessions,
+    updateSummaryCache,
+    isInitialized,
+    isLoading: isStoreLoading,
   } = useChatStore()
   
-  // Initialize active session on first load
+  // Initialize sessions from server on first load
   useEffect(() => {
-    if (!activeSessionId && sessions.length > 0) {
+    initializeSessions()
+  }, [initializeSessions])
+  
+  // Initialize active session after sessions are loaded
+  useEffect(() => {
+    if (isInitialized && !activeSessionId && sessions.length > 0) {
       setActiveSession(sessions[0].id)
     }
-  }, [activeSessionId, sessions, setActiveSession])
+  }, [isInitialized, activeSessionId, sessions, setActiveSession])
   
   // Get active session
   const activeSession = sessions.find(s => s.id === activeSessionId)
@@ -45,9 +54,14 @@ export default function ChatPage() {
   const selectedMessageId = activeSession?.selectedMessageId
   const selectedMessage = messages.find(m => m.id === selectedMessageId) ?? null
   
+  // Get cached summary from session (server-persisted)
+  const contextSummary = activeSession?.contextSummary ?? null
+  const summarizedCount = activeSession?.summarizedCount ?? 0
+  
   // Local UI state
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [skipMemory, setSkipMemory] = useState(false)  // Skip memory retrieval for testing
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Sidebar state (global, not per-session)
@@ -91,6 +105,66 @@ export default function ChatPage() {
     const interval = setInterval(loadBufferData, 5000)
     return () => clearInterval(interval)
   }, [activeTab])
+
+  // Buffer Flush Triggers: Flush buffer when user leaves or hides the page
+  // Covers: browser tab close, navigate away, tab switch, minimize, mobile background
+  useEffect(() => {
+    const flushBuffer = (source: string) => {
+      // Use sendBeacon for reliability during page transitions
+      // Relative path goes through Vite proxy (avoids CORS issues)
+      navigator.sendBeacon(`/api/buffer/flush?source=${source}`, '')
+      
+      // Optimistic UI update: clear local state immediately
+      setBufferStatus(prev => prev ? { ...prev, message_count: 0, estimated_tokens: 0, fill_percentage: 0 } : null)
+      setBufferMessages([])
+    }
+    
+    // 1. beforeunload: fires when tab closes or navigates away
+    const handleBeforeUnload = () => {
+      flushBuffer('page_close')
+    }
+    
+    // 2. visibilitychange: fires when tab becomes hidden OR visible
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushBuffer('tab_hidden')
+      } else if (document.visibilityState === 'visible') {
+        // Refresh buffer data when page becomes visible again
+        loadBufferData()
+      }
+    }
+    
+    // 3. pagehide: more reliable on mobile Safari
+    const handlePageHide = (e: PageTransitionEvent) => {
+      // e.persisted is true if page might be restored from bfcache
+      flushBuffer(e.persisted ? 'page_hide_cached' : 'page_hide')
+    }
+    
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', handlePageHide)
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', handlePageHide)
+    }
+  }, [])
+
+  // 4. Session Change Flush: Flush when switching between chat sessions (Chat 1 → Chat 2)
+  const prevSessionId = useRef<string | null>(null)
+  useEffect(() => {
+    // Skip initial mount
+    if (prevSessionId.current !== null && prevSessionId.current !== activeSessionId) {
+      // User switched sessions, flush the buffer
+      navigator.sendBeacon('/api/buffer/flush?source=session_switch', '')
+      
+      // Optimistic UI update
+      setBufferStatus(prev => prev ? { ...prev, message_count: 0, estimated_tokens: 0, fill_percentage: 0 } : null)
+      setBufferMessages([])
+    }
+    prevSessionId.current = activeSessionId
+  }, [activeSessionId])
 
   const loadBufferData = async () => {
     try {
@@ -140,17 +214,34 @@ export default function ChatPage() {
     setIsLoading(true)
 
     try {
-      // Build conversation history for context
+      // Build FULL conversation history (backend handles Rolling Summary Buffer)
+      // No longer limiting to 10 - backend will summarize old messages
       const conversationHistory = messages
         .filter(m => m.role !== 'system')
-        .slice(-10)
         .map(m => ({
           role: m.role,
           content: m.content,
         }))
 
-      // Call the natural conversation endpoint
-      const result = await api.conversation(userMessage.content, mode, conversationHistory)
+      // Call the natural conversation endpoint with cached context summary
+      // Backend will detect stale cache using summarizedCount
+      const result = await api.conversation(
+        userMessage.content, 
+        mode, 
+        conversationHistory, 
+        skipMemory,
+        contextSummary ?? undefined,  // Pass cached summary
+        summarizedCount ?? undefined  // Pass count for stale detection
+      )
+      
+      // Update cached context summary and count if backend returns new values
+      // This persists to server via chatStore.updateSummaryCache
+      if (result.context_summary !== undefined || result.summarized_count !== undefined) {
+        updateSummaryCache(
+          result.context_summary ?? null,
+          result.summarized_count ?? 0
+        )
+      }
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -214,30 +305,69 @@ export default function ChatPage() {
           {/* Session Tabs */}
           <SessionTabs />
           
-          {/* Mode Toggle */}
-          <div className="flex items-center gap-2 bg-white/5 rounded-full p-1">
-            <button
-              onClick={() => setMode('fast')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                mode === 'fast'
-                  ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              <Zap className="w-4 h-4" />
-              Fast
-            </button>
-            <button
-              onClick={() => setMode('deep')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                mode === 'deep'
-                  ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
-                  : 'text-gray-400 hover:text-white'
-              }`}
-            >
-              <Brain className="w-4 h-4" />
-              Deep
-            </button>
+          {/* Session Info + Mode Toggle */}
+          <div className="flex items-center gap-4">
+            {/* Session Start Time */}
+            {activeSession && (
+              <div className="flex items-center gap-2 text-xs text-gray-400">
+                <Clock className="w-3.5 h-3.5" />
+                <span>
+                  세션 시작: {(() => {
+                    const createdAt = new Date(activeSession.createdAt)
+                    const now = new Date()
+                    const diffMs = now.getTime() - createdAt.getTime()
+                    const diffMins = Math.floor(diffMs / 60000)
+                    const diffHours = Math.floor(diffMins / 60)
+                    const diffDays = Math.floor(diffHours / 24)
+                    
+                    if (diffDays > 0) {
+                      return `${diffDays}일 전`
+                    } else if (diffHours > 0) {
+                      return `${diffHours}시간 전`
+                    } else if (diffMins > 0) {
+                      return `${diffMins}분 전`
+                    } else {
+                      return '방금 전'
+                    }
+                  })()}
+                </span>
+                <span className="text-gray-600">|</span>
+                <span className="font-mono text-[10px] text-gray-500">
+                  {new Date(activeSession.createdAt).toLocaleString('ko-KR', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </span>
+              </div>
+            )}
+            
+            {/* Mode Toggle */}
+            <div className="flex items-center gap-2 bg-white/5 rounded-full p-1">
+              <button
+                onClick={() => setMode('fast')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                  mode === 'fast'
+                    ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Zap className="w-4 h-4" />
+                Fast
+              </button>
+              <button
+                onClick={() => setMode('deep')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                  mode === 'deep'
+                    ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                <Brain className="w-4 h-4" />
+                Deep
+              </button>
+            </div>
           </div>
         </header>
 
@@ -301,19 +431,47 @@ export default function ChatPage() {
 
         {/* Input */}
         <div className="p-4 border-t border-white/10">
+          {/* Skip Memory Toggle */}
+          <div className="flex items-center justify-end gap-2 mb-2">
+            <button
+              onClick={() => setSkipMemory(!skipMemory)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+                skipMemory
+                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
+                  : 'bg-white/5 text-gray-500 hover:text-gray-400 border border-transparent'
+              }`}
+              title={skipMemory ? '메모리 검색 비활성화됨 (테스트 모드)' : '메모리 검색 활성화됨'}
+            >
+              <MemoryStick className="w-3.5 h-3.5" />
+              {skipMemory ? '메모리 OFF' : '메모리 ON'}
+            </button>
+            {skipMemory && (
+              <span className="text-[10px] text-red-400/70">
+                ⚠️ 테스트 모드: LLM이 메모리를 참조하지 않습니다
+              </span>
+            )}
+          </div>
           <div className="flex gap-3">
             <input
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-              placeholder="무엇이든 이야기해주세요... (엔터로 전송)"
-              className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20"
+              placeholder={skipMemory ? "메모리 없이 질문합니다..." : "무엇이든 이야기해주세요... (엔터로 전송)"}
+              className={`flex-1 bg-white/5 border rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:ring-2 transition-all ${
+                skipMemory 
+                  ? 'border-red-500/30 focus:border-red-500 focus:ring-red-500/20' 
+                  : 'border-white/10 focus:border-blue-500 focus:ring-blue-500/20'
+              }`}
             />
             <button
               onClick={handleSend}
               disabled={!input.trim() || isLoading}
-              className="px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl text-white hover:shadow-lg hover:shadow-blue-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+              className={`px-4 py-3 rounded-xl text-white hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transition-all ${
+                skipMemory
+                  ? 'bg-gradient-to-r from-red-600 to-orange-600 hover:shadow-red-500/25'
+                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-blue-500/25'
+              }`}
             >
               <Send className="w-5 h-5" />
             </button>
@@ -727,18 +885,6 @@ export default function ChatPage() {
                             {step.step === 'context_building' && (
                               <>
                                 <div className="flex justify-between">
-                                  <span className="text-gray-500">시스템 프롬프트</span>
-                                  <span className="text-white">{step.details.system_prompt_length} chars</span>
-                                </div>
-                                <div className="flex justify-between">
-                                  <span className="text-gray-500">메모리 컨텍스트</span>
-                                  <span className="text-cyan-400">{step.details.memory_context_length} chars</span>
-                                </div>
-                                <div className="flex justify-between">
-                                  <span className="text-gray-500">히스토리 메시지</span>
-                                  <span className="text-white">{step.details.history_messages}개</span>
-                                </div>
-                                <div className="flex justify-between">
                                   <span className="text-gray-500">총 메시지</span>
                                   <span className="text-white">{step.details.total_messages}개</span>
                                 </div>
@@ -748,24 +894,126 @@ export default function ChatPage() {
                                     <span className="text-orange-400">{step.details.pruned_messages}개</span>
                                   </div>
                                 )}
-                                {/* System Prompt Preview */}
-                                {step.details.system_prompt_preview && (
+                                {/* Rolling Summary Buffer Status (LangChain pattern) */}
+                                {step.details.rolling_summary && (
                                   <div className="mt-2 pt-2 border-t border-white/5">
-                                    <span className="text-gray-400 text-[10px] uppercase tracking-wide">시스템 프롬프트</span>
-                                    <div className="mt-1 p-2 bg-white/5 rounded text-[10px] text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
-                                      {step.details.system_prompt_preview}
+                                    <span className="text-amber-400 text-[10px] uppercase tracking-wide font-medium">
+                                      📜 롤링 서머리 버퍼
+                                    </span>
+                                    <div className="mt-1.5 p-2 bg-amber-500/10 rounded border border-amber-500/20">
+                                      <div className="space-y-1 text-[11px]">
+                                        <div className="flex justify-between">
+                                          <span className="text-gray-400">활성화</span>
+                                          <span className={step.details.rolling_summary.enabled ? "text-green-400" : "text-gray-500"}>
+                                            {step.details.rolling_summary.enabled ? "✓ 예" : "아니오"}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span className="text-gray-400">대화 히스토리</span>
+                                          <span className="text-white">{step.details.rolling_summary.history_size}개</span>
+                                        </div>
+                                        <div className="flex justify-between">
+                                          <span className="text-gray-400">윈도우 크기</span>
+                                          <span className="text-white">{step.details.rolling_summary.window_size}개</span>
+                                        </div>
+                                        {step.details.rolling_summary.summarized_count > 0 && (
+                                          <div className="flex justify-between">
+                                            <span className="text-gray-400">요약된 메시지</span>
+                                            <span className="text-amber-400">{step.details.rolling_summary.summarized_count}개</span>
+                                          </div>
+                                        )}
+                                        {step.details.rolling_summary.summary_preview && (
+                                          <div className="mt-2 pt-2 border-t border-amber-500/20">
+                                            <span className="text-gray-400 text-[10px]">요약 미리보기:</span>
+                                            <p className="mt-1 text-gray-300 text-[10px] leading-relaxed italic">
+                                              "{step.details.rolling_summary.summary_preview}"
+                                            </p>
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
                                   </div>
                                 )}
-                                {/* Memory Context Preview */}
-                                {step.details.memory_context_preview && (
-                                  <div className="mt-2 pt-2 border-t border-white/5">
-                                    <span className="text-cyan-400 text-[10px] uppercase tracking-wide">메모리 컨텍스트</span>
-                                    <div className="mt-1 p-2 bg-cyan-500/10 rounded border border-cyan-500/20 text-[10px] text-gray-300 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto">
-                                      {step.details.memory_context_preview}
+                                {/* LLM Messages - Split into Compacted and Recent */}
+                                {step.details.llm_messages && step.details.llm_messages.length > 0 && (() => {
+                                  // Separate compacted (Earlier Context Summary) from other messages
+                                  const compactedMessages = step.details.llm_messages.filter(
+                                    (msg: {label: string}) => msg.label === 'Earlier Context Summary'
+                                  )
+                                  const recentMessages = step.details.llm_messages.filter(
+                                    (msg: {label: string}) => msg.label !== 'Earlier Context Summary'
+                                  )
+                                  
+                                  const renderMessage = (msg: {index: number; role: string; label: string; content: string; content_length: number}, i: number) => {
+                                    const getBgColor = () => {
+                                      if (msg.label === 'System Prompt') return 'bg-slate-500/10 border-slate-500/30'
+                                      if (msg.label === 'Memory Context') return 'bg-cyan-500/10 border-cyan-500/30'
+                                      if (msg.label === 'Earlier Context Summary') return 'bg-amber-500/10 border-amber-500/30'
+                                      if (msg.role === 'user') return 'bg-blue-500/10 border-blue-500/30'
+                                      if (msg.role === 'assistant') return 'bg-purple-500/10 border-purple-500/30'
+                                      return 'bg-white/5 border-white/10'
+                                    }
+                                    
+                                    const getLabelColor = () => {
+                                      if (msg.label === 'System Prompt') return 'bg-slate-500/30 text-slate-300'
+                                      if (msg.label === 'Memory Context') return 'bg-cyan-500/30 text-cyan-300'
+                                      if (msg.label === 'Earlier Context Summary') return 'bg-amber-500/30 text-amber-300'
+                                      if (msg.role === 'user') return 'bg-blue-500/30 text-blue-300'
+                                      if (msg.role === 'assistant') return 'bg-purple-500/30 text-purple-300'
+                                      return 'bg-white/20 text-gray-300'
+                                    }
+                                    
+                                    return (
+                                      <div key={i} className={`p-2 rounded-lg border ${getBgColor()}`}>
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <div className="flex items-center gap-1.5">
+                                            <span className="text-[9px] text-gray-500 font-mono">#{msg.index}</span>
+                                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-medium ${getLabelColor()}`}>
+                                              {msg.label}
+                                            </span>
+                                          </div>
+                                          <span className="text-[9px] text-gray-500">
+                                            {msg.content_length} chars
+                                          </span>
+                                        </div>
+                                        <div className="text-[10px] text-gray-200 whitespace-pre-wrap leading-relaxed max-h-32 overflow-y-auto font-mono bg-black/20 rounded p-1.5">
+                                          {msg.content}
+                                        </div>
+                                      </div>
+                                    )
+                                  }
+                                  
+                                  return (
+                                    <div className="mt-2 pt-2 border-t border-white/5">
+                                      {/* Compacted Messages (Earlier Context Summary) - FIRST */}
+                                      {compactedMessages.length > 0 && (
+                                        <div className="mb-3">
+                                          <div className="flex items-center gap-2 mb-2">
+                                            <span className="text-amber-400 text-[10px] uppercase tracking-wide font-medium">
+                                              🗜️ 컴팩션된 메시지
+                                            </span>
+                                            <span className="text-[9px] text-amber-400/70 bg-amber-500/10 px-1.5 py-0.5 rounded">
+                                              {step.details.rolling_summary?.summarized_count || '?'}개의 이전 메시지 → 1개 요약
+                                            </span>
+                                          </div>
+                                          <div className="space-y-2 p-2 bg-amber-500/5 rounded-lg border border-amber-500/20">
+                                            {compactedMessages.map(renderMessage)}
+                                          </div>
+                                        </div>
+                                      )}
+                                      
+                                      {/* Recent Messages (Non-compacted) */}
+                                      <div>
+                                        <span className="text-teal-400 text-[10px] uppercase tracking-wide font-medium">
+                                          📤 {compactedMessages.length > 0 ? '최근 메시지 (원본 유지)' : 'LLM에 전달되는 메시지 (실제 요청)'}
+                                        </span>
+                                        <div className="mt-2 space-y-2 max-h-[400px] overflow-y-auto">
+                                          {recentMessages.map(renderMessage)}
+                                        </div>
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
+                                  )
+                                })()}
                               </>
                             )}
 
