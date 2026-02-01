@@ -1,3 +1,0 @@
-{"timestamp": "2026-02-02T00:09:43.115632", "type": "pipeline_execution", "total_duration": 315.172, "stages": {"extract": 315.17, "store": 0.008}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 769}
-{"timestamp": "2026-02-02T00:48:35.741761", "type": "pipeline_execution", "total_duration": 9.895, "stages": {"extract": 9.892, "store": 4.151}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 865}
-{"timestamp": "2026-02-02T00:56:03.871139", "type": "pipeline_execution", "total_duration": 353.011, "stages": {"extract": 353.009, "store": 3.271}, "facts": {"extracted": 1, "stored": 1}, "embeddings": {"count": 1, "batched": true}, "text_length": 854}

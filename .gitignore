@@ -43,6 +43,7 @@ env.bak/
 venv.bak/
 
 # Logs
+logs/
 *.log
 backend.log
 npm-debug.log*
