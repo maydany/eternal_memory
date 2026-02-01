@@ -41,6 +41,7 @@ export interface ProcessStep {
   details?: {
     mode?: string;
     model?: string;
+    semantic_keywords?: string[];
     items_found?: number;
     categories_matched?: string[];
     retrieved_items?: { id: string; content: string; category_path: string; confidence: number }[];

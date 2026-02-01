@@ -182,10 +182,37 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
         memories_stored = []
         memory_context = ""
         retrieval_categories = []
+        semantic_keywords = []
         
         step1_start = time.time()
         retrieval_status = "completed"
         retrieval_error = None
+        
+        # Extract semantic keywords from query using LLM
+        try:
+            api_key = os.getenv("OPENAI_API_KEY")
+            model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+            from openai import AsyncOpenAI
+            keyword_client = AsyncOpenAI(api_key=api_key)
+            
+            keyword_prompt = f"""Extract 3-5 core semantic concepts from this query that would be useful for memory search.
+Return ONLY a comma-separated list of keywords/concepts in the same language as the query.
+Do not include explanations.
+
+Query: {request.message}
+
+Keywords:"""
+            
+            keyword_response = await keyword_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": keyword_prompt}],
+                temperature=0,
+                max_tokens=50,
+            )
+            keywords_raw = keyword_response.choices[0].message.content.strip()
+            semantic_keywords = [k.strip() for k in keywords_raw.split(",") if k.strip()][:5]
+        except Exception:
+            semantic_keywords = []  # Silent fail, not critical
         
         try:
             result = await system.retrieve(request.message, request.mode)
@@ -212,6 +239,7 @@ async def conversation(request: ConversationRequest, background_tasks: Backgroun
             "duration_ms": step1_duration,
             "details": {
                 "mode": request.mode,
+                "semantic_keywords": semantic_keywords,
                 "items_found": len(memories_retrieved),
                 "categories_matched": retrieval_categories,
                 "error": retrieval_error,

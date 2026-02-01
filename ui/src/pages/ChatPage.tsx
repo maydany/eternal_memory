@@ -51,8 +51,24 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // Sidebar state (global, not per-session)
-  const [activeTab, setActiveTab] = useState<'memory' | 'buffer' | 'process'>('memory')
+  const [activeTab, setActiveTab] = useState<'memory' | 'buffer' | 'process'>(() => {
+    const saved = localStorage.getItem('chatPageActiveTab')
+    return (saved === 'memory' || saved === 'buffer' || saved === 'process') ? saved : 'process'
+  })
+
+  // Persist tab selection to localStorage
+  useEffect(() => {
+    localStorage.setItem('chatPageActiveTab', activeTab)
+  }, [activeTab])
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set())
+  const [expandAllSteps, setExpandAllSteps] = useState(() => {
+    return localStorage.getItem('chatPageExpandAllSteps') === 'true'
+  })
+
+  // Persist expand all toggle to localStorage
+  useEffect(() => {
+    localStorage.setItem('chatPageExpandAllSteps', expandAllSteps.toString())
+  }, [expandAllSteps])
   const [bufferStatus, setBufferStatus] = useState<BufferStatus | null>(null)
   const [bufferMessages, setBufferMessages] = useState<BufferMessage[]>([])
   const [isFlushLoading, setIsFlushLoading] = useState(false)
@@ -311,15 +327,15 @@ export default function ChatPage() {
         <header className="h-16 px-3 flex items-center border-b border-white/10">
           <div className="flex w-full bg-white/5 rounded-lg p-1">
             <button
-              onClick={() => setActiveTab('memory')}
+              onClick={() => setActiveTab('process')}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition-all ${
-                activeTab === 'memory'
-                  ? 'bg-purple-600 text-white'
+                activeTab === 'process'
+                  ? 'bg-teal-600 text-white'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              <MemoryStick className="w-3.5 h-3.5" />
-              Memory
+              <Activity className="w-3.5 h-3.5" />
+              Process
             </button>
             <button
               onClick={() => setActiveTab('buffer')}
@@ -338,15 +354,15 @@ export default function ChatPage() {
               )}
             </button>
             <button
-              onClick={() => setActiveTab('process')}
+              onClick={() => setActiveTab('memory')}
               className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-md text-xs font-medium transition-all ${
-                activeTab === 'process'
-                  ? 'bg-teal-600 text-white'
+                activeTab === 'memory'
+                  ? 'bg-purple-600 text-white'
                   : 'text-gray-400 hover:text-white'
               }`}
             >
-              <Activity className="w-3.5 h-3.5" />
-              Process
+              <MemoryStick className="w-3.5 h-3.5" />
+              Memory
             </button>
           </div>
         </header>
@@ -549,10 +565,23 @@ export default function ChatPage() {
             selectedMessage?.processingInfo?.process_steps ? (
               <div className="space-y-3">
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs font-medium text-teal-400 flex items-center gap-1.5">
-                    <Activity className="w-3.5 h-3.5" />
-                    처리 과정
-                  </h4>
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs font-medium text-teal-400 flex items-center gap-1.5">
+                      <Activity className="w-3.5 h-3.5" />
+                      처리 과정
+                    </h4>
+                    {/* Expand All Toggle */}
+                    <button
+                      onClick={() => setExpandAllSteps(!expandAllSteps)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-medium transition-all ${
+                        expandAllSteps
+                          ? 'bg-teal-500/30 text-teal-300 border border-teal-500/50'
+                          : 'bg-white/5 text-gray-400 border border-white/10 hover:text-white'
+                      }`}
+                    >
+                      {expandAllSteps ? '모두 접기' : '모두 펼치기'}
+                    </button>
+                  </div>
                   <span className="text-[10px] text-gray-500">
                     총 {selectedMessage.processingInfo.process_steps.reduce((acc: number, s: ProcessStep) => acc + (s.duration_ms || 0), 0)}ms
                   </span>
@@ -568,7 +597,7 @@ export default function ChatPage() {
                     buffer_update: '📝 버퍼 업데이트',
                   }
                   
-                  const isExpanded = expandedSteps.has(step.step)
+                  const isExpanded = expandAllSteps || expandedSteps.has(step.step)
                   
                   const toggleExpand = () => {
                     setExpandedSteps(prev => {
@@ -646,6 +675,19 @@ export default function ChatPage() {
                                   <span className="text-gray-500">검색 모드</span>
                                   <span className="text-white">{step.details.mode}</span>
                                 </div>
+                                {/* Semantic Keywords */}
+                                {step.details.semantic_keywords && step.details.semantic_keywords.length > 0 && (
+                                  <div>
+                                    <span className="text-gray-500">🔑 검색 핵심 개념</span>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {step.details.semantic_keywords.map((keyword: string, i: number) => (
+                                        <span key={i} className="px-2 py-0.5 bg-teal-500/20 border border-teal-500/30 rounded-full text-teal-300 text-[10px]">
+                                          {keyword}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
                                 <div className="flex justify-between">
                                   <span className="text-gray-500">검색된 항목</span>
                                   <span className="text-cyan-400">{step.details.items_found}개</span>
