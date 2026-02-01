@@ -45,9 +45,14 @@ class RetentionConfig(BaseModel):
 
 
 class EmbeddingConfig(BaseModel):
-    """Embedding model configuration."""
-    model: str = "text-embedding-ada-002"
-    dimension: int = 1536
+    """Embedding model configuration.
+    
+    Using text-embedding-3-large with Matryoshka dimension reduction to 1536.
+    This provides embedding-3-large's superior multilingual performance (MIRACL: 54.9%)
+    while maintaining compatibility with pgvector's HNSW index (2000d limit).
+    """
+    model: str = "text-embedding-3-large"
+    dimension: int = 1536  # Matryoshka-reduced from native 3072d
 
 
 class ConsolidationConfig(BaseModel):

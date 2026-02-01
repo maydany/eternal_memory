@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS categories (
     parent_id UUID REFERENCES categories(id),
     summary TEXT,                               -- High-level summary of contained items
     path TEXT NOT NULL UNIQUE,                  -- Full path like 'knowledge/coding/python'
-    embedding vector(1536),                     -- Category embedding for semantic matching
+    embedding vector(1536),                     -- Category embedding (embedding-3-large with Matryoshka 1536d)
     last_accessed TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS memory_items (
     category_id UUID REFERENCES categories(id),
     resource_id UUID REFERENCES resources(id),
     content TEXT NOT NULL,                      -- The actual fact/memory
-    embedding vector(1536),                     -- Vector for RAG (OpenAI ada-002 compatible)
+    embedding vector(1536),                     -- Vector for RAG (embedding-3-large with Matryoshka 1536d)
     type VARCHAR(20) DEFAULT 'fact',            -- fact, preference, event, plan
     importance FLOAT DEFAULT 0.5,               -- 0.0 to 1.0 (Salience)
     confidence FLOAT DEFAULT 1.0,               -- 0.0 to 1.0
@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS semantic_triples (
 );
 
 -- Indexes for performance
+-- Using text-embedding-3-large with Matryoshka reduction (1536d) for HNSW compatibility
 CREATE INDEX IF NOT EXISTS idx_memory_embedding 
     ON memory_items USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_category_embedding 
