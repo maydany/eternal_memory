@@ -1,7 +1,7 @@
 # Eternal Memory 시스템 사양서
 
-**Document Version:** 3.0.0  
-**Last Updated:** 2026-02-01  
+**Document Version:** 4.0.0  
+**Last Updated:** 2026-02-02  
 **Status:** Production Ready
 
 ## 1. 서론
@@ -185,9 +185,10 @@ Eternal Memory 시스템은 네 가지 핵심 원칙을 기반으로 설계되�
 - **API Framework**: FastAPI 0.104+
 - **Frontend**: React + TypeScript + Vite + TailwindCSS
 - **LLM Integration**: OpenAI GPT-4o-mini (다중 모델 지원)
-- **Embedding**: text-embedding-ada-002 (1536 dim)
+- **Embedding**: text-embedding-3-large (1536d Matryoshka dim reduction)
 - **Storage**: Triple-layer (Semantic Triples + MemoryItems + Markdown)
 - **Scheduling**: APScheduler 기반 Cron Scheduler
+- **Monitoring**: PerformanceMonitor (JSON 로그 기반)
 
 ## 2. 시스템 아키텍처
 
@@ -569,6 +570,41 @@ CREATE TABLE IF NOT EXISTS semantic_triples (
     
     created_at TIMESTAMPTZ DEFAULT NOW(),
     last_accessed TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Token Usage: Cost Tracking
+CREATE TABLE IF NOT EXISTS token_usage (
+    model TEXT PRIMARY KEY,
+    prompt_tokens BIGINT DEFAULT 0,
+    completion_tokens BIGINT DEFAULT 0,
+    total_tokens BIGINT DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 6. Scheduled Tasks: Persistent Job Registry
+CREATE TABLE IF NOT EXISTS scheduled_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    job_type TEXT NOT NULL,
+    interval_seconds INT NOT NULL,
+    enabled BOOLEAN DEFAULT true,
+    is_system BOOLEAN DEFAULT false,
+    last_run TIMESTAMPTZ,
+    next_run TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 7. Chat Sessions: Server-side session persistence (cross-device)
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) NOT NULL DEFAULT 'New Chat',
+    messages JSONB NOT NULL DEFAULT '[]'::jsonb,     -- Array of Message objects
+    mode VARCHAR(10) NOT NULL DEFAULT 'fast',        -- 'fast' | 'deep'
+    context_summary TEXT,                            -- Rolling summary cache
+    summarized_count INTEGER DEFAULT 0,              -- For stale cache detection
+    selected_message_id VARCHAR(255),                -- Currently selected message
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    last_active_at TIMESTAMPTZ DEFAULT NOW()
 );
 ```
 
@@ -999,6 +1035,51 @@ class RetrievalResult(BaseModel):
 ```
     retrieval_mode: str                # "fast" or "deep"
     confidence_score: float            # 0.0 ~ 1.0
+```
+
+### 9.4 Generative Agents Search (Park et al., 2023)
+
+시스템은 Stanford의 Generative Agents 논문에서 제안된 검색 알고리즘을 구현합니다:
+
+**점수 공식:**
+```
+Score = α_relevance × Relevance + α_recency × Recency + α_importance × Importance
+```
+
+**구성 요소:**
+- **Relevance**: 코사인 유사도 (1 - cosine_distance)
+- **Recency**: 시간 기반 감쇠 (decay_factor^hours_since_access)
+- **Importance**: 기억의 중요도 (0.0 ~ 1.0)
+
+```python
+# repository.py - generative_agents_search
+async def generative_agents_search(
+    self,
+    query_embedding: List[float],
+    limit: int = 10,
+    alpha_relevance: float = 1.0,
+    alpha_recency: float = 1.0,
+    alpha_importance: float = 1.0,
+    recency_decay_factor: float = 0.995,  # Generative Agents 기본값
+    min_relevance_threshold: float = 0.3,
+) -> List[MemoryItem]:
+    """
+    Search using Generative Agents scoring formula.
+    
+    Based on: "Generative Agents: Interactive Simulacra of Human Behavior"
+    Park et al., Stanford University, 2023
+    """
+    ...
+```
+
+**설정 (`ScoringConfig`):**
+```yaml
+scoring:
+  alpha_relevance: 1.0
+  alpha_recency: 1.0
+  alpha_importance: 1.0
+  recency_decay_factor: 0.995
+  min_relevance_threshold: 0.3
 ```
 
 ## 10. Predict 파이프라인
@@ -1440,8 +1521,45 @@ async def _track_usage(self, usage: openai.types.CompletionUsage):
 
 ```python
 class DatabaseConfig(BaseModel):
-    connection_string: str = "postgresql://localhost/eternal_memory"
-    pool_size: int = 10
+    """Database connection configuration."""
+    host: str = "localhost"
+    port: int = 5432
+    name: str = "eternal_memory"
+    user: Optional[str] = None
+    password: Optional[str] = None
+
+class EmbeddingConfig(BaseModel):
+    """Embedding model configuration.
+    
+    Using text-embedding-3-large with Matryoshka dimension reduction to 1536.
+    This provides embedding-3-large's superior multilingual performance (MIRACL: 54.9%)
+    while maintaining compatibility with pgvector's HNSW index (2000d limit).
+    """
+    model: str = "text-embedding-3-large"
+    dimension: int = 1536  # Matryoshka-reduced from native 3072d
+
+class ScoringConfig(BaseModel):
+    """Memory scoring configuration based on Generative Agents (Park et al., 2023).
+    
+    Retrieval score = α_relevance × Relevance + α_recency × Recency + α_importance × Importance
+    """
+    alpha_relevance: float = 1.0  # Weight for semantic similarity
+    alpha_recency: float = 1.0    # Weight for time-based decay
+    alpha_importance: float = 1.0 # Weight for memory importance
+    recency_decay_factor: float = 0.995  # Generative Agents default
+    min_relevance_threshold: float = 0.3
+
+class BufferConfig(BaseModel):
+    """Conversation buffer configuration."""
+    flush_threshold_tokens: int = 4000  # OpenClaw default
+    auto_flush_enabled: bool = True
+    idle_flush_timeout_minutes: int = 10
+
+class RetentionConfig(BaseModel):
+    """Memory retention policy configuration."""
+    stale_days_threshold: int = 30
+    archive_low_importance: bool = True
+    importance_threshold: float = 0.3
 
 class LLMConfig(BaseModel):
     """다중 모델 지원 및 기능 토글"""
@@ -1458,23 +1576,22 @@ class LLMConfig(BaseModel):
     
     # 기능 토글 (Feature Toggles)
     use_llm_importance: bool = False       # LLM 기반 중요도 평가
-    use_memory_supersede: bool = False     # MemGPT-style 기억 대체 감지
-    use_semantic_triples: bool = False     # LangMem-style 트리플 추출
+    use_memory_supersede: bool = True      # MemGPT-style 기억 대체 감지 (기본 활성화)
+    use_semantic_triples: bool = True      # LangMem-style 트리플 추출 (항상 활성화)
     
     # Lazy Evaluation (지연 평가)
     triple_extraction_immediate: bool = True   # True=즉시, False=배치
     triple_extraction_interval_minutes: int = 5  # 배치 간격 (1, 5, 10, 30분)
 
-class RetentionConfig(BaseModel):
-    archive_after_days: int = 90
-    consolidate_interval_hours: int = 24
-
 class MemoryConfig(BaseModel):
+    """Main configuration model."""
     database: DatabaseConfig
-    llm: LLMConfig
+    embedding: EmbeddingConfig
+    scoring: ScoringConfig
+    buffer: BufferConfig
     retention: RetentionConfig
+    llm: LLMConfig
     vault_path: str = "user_memory/markdown"
-    buffer_size: int = 10
 
 def load_config(config_path: str = "user_memory/config/memory_config.yaml") -> MemoryConfig:
     with open(config_path) as f:
@@ -1564,6 +1681,68 @@ async def trigger_job(job_name: str):
     return {"status": "triggered"}
 ```
 
+### 15.2 Sessions API
+
+Server-side 세션 관리를 위한 API 엔드포인트입니다:
+
+```python
+@router.get("/sessions")
+async def list_sessions():
+    """모든 채팅 세션 목록 조회 (메시지 내용 제외)"""
+    
+@router.post("/sessions")
+async def create_session(request: SessionCreate):
+    """새로운 채팅 세션 생성"""
+    
+@router.get("/sessions/{session_id}")
+async def get_session(session_id: UUID):
+    """특정 세션 상세 조회 (메시지 포함)"""
+    
+@router.put("/sessions/{session_id}")
+async def update_session(session_id: UUID, request: SessionUpdate):
+    """세션 업데이트 (이름, 메시지, 모드, 요약 등)"""
+    
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: UUID):
+    """채팅 세션 삭제"""
+```
+
+### 15.3 Metrics API
+
+성능 모니터링 엔드포인트입니다:
+
+```python
+@router.get("/metrics/summary")
+async def get_metrics_summary():
+    """집계된 성능 요약 조회"""
+    
+@router.get("/metrics/recent")
+async def get_recent_metrics(limit: Optional[int] = 50):
+    """최근 메트릭 조회 (메모리 내)"""
+    
+@router.get("/metrics/logs")
+async def list_log_files():
+    """사용 가능한 로그 파일 목록"""
+    
+@router.get("/metrics/logs/{filename}")
+async def get_log_file(filename: str, limit: Optional[int] = 100):
+    """특정 로그 파일에서 메트릭 조회"""
+```
+
+### 15.4 Chat API
+
+대화 및 메모리 관리 엔드포인트입니다:
+
+```python
+@router.post("/chat/conversation")
+async def conversation(request: ConversationRequest):
+    """자연어 대화 + 자동 메모리 관리"""
+    # 1. 관련 메모리 검색
+    # 2. LLM 응답 생성 (메모리 컨텍스트 포함)
+    # 3. 중요 정보 자동 저장 (비동기 백그라운드)
+    # 4. Rolling Summary 컨텍스트 관리
+```
+
 ## 16. 보안 및 권한 관리
 
 ### 16.1 파일 시스템 보안
@@ -1645,6 +1824,86 @@ GET /jobs
 
 ---
 
+## 18. 성능 모니터링
+
+### 18.1 PerformanceMonitor
+
+`monitoring/performance.py`는 파이프라인 실행 메트릭을 수집하고 로깅합니다.
+
+**기능:**
+- 스테이지별 타이밍 측정
+- 임베딩 성능 추적
+- 캐시 통계
+- JSON 형식 로그 (daily rotation)
+- 인메모리 최근 메트릭 보관
+
+```python
+class PerformanceMonitor:
+    def __init__(self, log_dir: str = "logs", max_recent: int = 100):
+        self.recent_metrics: deque = deque(maxlen=max_recent)
+        
+    async def record_pipeline_execution(self, context: Dict[str, Any]):
+        """파이프라인 실행 완료 후 메트릭 기록"""
+        
+    def get_summary(self) -> Dict[str, Any]:
+        """집계된 성능 요약 반환"""
+        # total_pipelines, avg_duration, p95_duration 등
+```
+
+**로그 형식:**
+```json
+{
+  "timestamp": "2026-02-02T01:15:00",
+  "type": "pipeline_execution",
+  "total_duration": 1.234,
+  "stages": {"extraction": 0.5, "store": 0.3, ...},
+  "facts": {"extracted": 3, "stored": 3},
+  "embeddings": {"count": 3, "batched": true}
+}
+```
+
+## 19. Server-side 세션 관리
+
+### 19.1 개요
+
+localStorage 기반 세션 저장에서 PostgreSQL 기반 서버사이드 저장으로 마이그레이션하여 **크로스 디바이스 세션 동기화**를 지원합니다.
+
+### 19.2 Chat Session 스키마
+
+```sql
+CREATE TABLE chat_sessions (
+    id UUID PRIMARY KEY,
+    name VARCHAR(255) DEFAULT 'New Chat',
+    messages JSONB DEFAULT '[]'::jsonb,
+    mode VARCHAR(10) DEFAULT 'fast',
+    context_summary TEXT,           -- Rolling Summary 캐시
+    summarized_count INTEGER,       -- Stale Cache Detection
+    selected_message_id VARCHAR(255),
+    created_at TIMESTAMPTZ,
+    last_active_at TIMESTAMPTZ
+);
+```
+
+### 19.3 Rolling Summary 컨텍스트 관리
+
+대화가 길어질 때 토큰 사용량을 최적화하면서 컨텍스트를 보존합니다:
+
+```
+[Context Window Strategy]
+┌─────────────────────────────────────────┐
+│  Rolling Summary (오래된 메시지 요약)    │  → context_summary
+├─────────────────────────────────────────┤
+│  Verbatim Window (최근 N개 메시지)       │  → messages[-15:]
+└─────────────────────────────────────────┘
+```
+
+**Stale Cache Detection:**
+- `summarized_count`: 요약된 메시지 수
+- 새 메시지가 추가되면 캐시 무효화 감지
+- 필요 시 Rolling Summary 재생성
+
+---
+
 ---
 
 # 결론
@@ -1654,7 +1913,7 @@ GET /jobs
 ## 구현 완료 사항
 
 ### 계층적 데이터 모델
-- Resource, MemoryItem, Category의 3계층 구조
+- Resource, MemoryItem, Category, SemanticTriple의 4계층 구조
 - Pydantic 기반 타입 안전성
 - PostgreSQL + pgvector 벡터 데이터베이스
 
@@ -1664,7 +1923,7 @@ GET /jobs
 
 ### 4가지 핵심 파이프라인
 1. **Memorize**: LLM 기반 사실 추출 및 저장
-2. **Retrieve**: Fast/Deep 이중 모드 검색
+2. **Retrieve**: Fast/Deep 이중 모드 검색 + Generative Agents Search
 3. **Predict**: 컨텍스트 예측 및 선제적 로딩
 4. **Consolidate**: 자동 요약 및 카테고리 관리
 
@@ -1675,10 +1934,17 @@ GET /jobs
 - 완전 비동기(AsyncIO) 스케줄러
 
 ### 프로덕션 준비
-- FastAPI 기반 REST API
+- FastAPI 기반 REST API (Sessions, Metrics, Chat)
 - 환경 변수 기반 설정
 - 토큰 사용량 추적
 - 입력 검증 및 보안
+- Performance Monitoring (JSON 로그)
+
+### v4.0.0 신규 기능
+- **text-embedding-3-large**: Matryoshka 차원 축소 (1536d), MIRACL 54.9% 다국어 성능
+- **Server-side 세션 관리**: PostgreSQL 기반 크로스 디바이스 동기화
+- **Rolling Summary**: 장기 대화 컨텍스트 보존
+- **Generative Agents Search**: Park et al. (2023) 기반 Relevance/Recency/Importance 점수
 
 ## 기술적 혁신
 
@@ -1730,8 +1996,8 @@ Reciprocal Rank Fusion (RRF)을 통해 벡터 검색과 키워드 검색을 결�
 
 ---
 
-**문서 버전**: 3.0.0  
-**마지막 업데이트**: 2026-02-01  
+**문서 버전**: 4.0.0  
+**마지막 업데이트**: 2026-02-02  
 **구현 상태**: Production Ready
 
 ---
@@ -1768,7 +2034,8 @@ Reciprocal Rank Fusion (RRF)을 통해 벡터 검색과 키워드 검색을 결�
 
 6. **OpenAI Embeddings**  
    https://platform.openai.com/docs/guides/embeddings  
-   - text-embedding-ada-002 (1536 dim)
+   - text-embedding-3-large (3072d native, 1536d Matryoshka reduced)
+   - MIRACL 54.9% multilingual performance
    - 배치 임베딩 API
 
 ### 업계 표준 패턴
@@ -1792,3 +2059,4 @@ Reciprocal Rank Fusion (RRF)을 통해 벡터 검색과 키워드 검색을 결�
 | 1.0.0 | 2026-01-15 | 초기 설계 문서 |
 | 2.0.0 | 2026-01-31 | 구현 완료, API 문서화 |
 | 3.0.0 | 2026-02-01 | Semantic Triples, MemGPT Supersede, Lazy Evaluation 추가 |
+| 4.0.0 | 2026-02-02 | text-embedding-3-large 마이그레이션, Server-side 세션 관리, Generative Agents Search, Performance Monitoring, Sessions/Metrics API 추가 |
